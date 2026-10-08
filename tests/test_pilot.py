@@ -433,6 +433,7 @@ def test_launch_reserves_before_build_and_records_call_before_get(
     assert options["memory"] == (65536, 65536)
     assert options["startup_timeout"] == 300
     assert options["timeout"] == 2700
+    assert options["scaledown_window"] == 2
     assert options["retries"] == 0
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     assert marker["app_id"] == "ap-test-app"

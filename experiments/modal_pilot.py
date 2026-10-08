@@ -339,7 +339,7 @@ def _launch(plan: pilot.PilotPlan, *, profile: str, workspace: str, environment:
             min_containers=0,
             max_containers=1,
             buffer_containers=0,
-            scaledown_window=1,
+            scaledown_window=2,
             retries=0,
             single_use_containers=True,
             serialized=True,
