@@ -1,5 +1,8 @@
 # Eight-pair FLUX.2 Klein scene-edit pilot
 
+The first GPU run completed eight updates but failed the saved-adapter reload check.
+See the [result and image comparison](pilot-result-2026-10-08.md). The protocol below records the original plan.
+
 The pilot checks that the pinned DiffSynth edit-training path can consume the project's owned procedural package renders, make eight LoRA updates, save and reload the adapter, and return actual before/after images. Synthetic packaging tests the pipeline only; it is not evidence about real product photography or image quality.
 
 ## CPU plan

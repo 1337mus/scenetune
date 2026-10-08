@@ -6,10 +6,16 @@ The goal: change a product photo's background while keeping its shape, color and
 
 ## Status
 
-**Building the pilot. No trained model or measured improvement yet.**
+**Pilot R3 failed at saved-adapter reload after eight updates. No image-quality improvement is established.**
 
-The first dataset uses original synthetic packaging images. It checks the training pipeline.
-It does not show performance on real product photography.
+| Evidence | Result |
+|---|---|
+| Reload parity | Failed: average channel difference 7.82 /255 (limit 2); 25.8% of pixels differ by >8 (limit 1%) |
+| Runtime | 129 seconds including downloads, generations, and training; no peak-memory or isolated training-time result |
+| Review | [R3 report](docs/pilot-result-2026-10-08.md) · [contact sheet](docs/assets/pilot-r3/contact-sheet.png) |
+| Next step | Diagnose saved-adapter reload mismatch before any further training; R3 was not retried |
+
+This run checks the synthetic training pipeline only. It does not establish performance on real product photography.
 
 ## What we will compare
 
@@ -37,7 +43,7 @@ These are allocations, not measured bills or provider-enforced caps.
 
 - [FLUX.2 Klein Base 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B).
 - Original procedural packaging data. No employer data or paid LLM-generated captions.
-- Existing training software. Its source and model components will be pinned before compute.
+- [Pinned DiffSynth training software and model components](docs/trainer-contract.md).
 
 ## Development
 
