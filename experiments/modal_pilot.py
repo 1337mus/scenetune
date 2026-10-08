@@ -316,6 +316,7 @@ def _launch(plan: pilot.PilotPlan, *, profile: str, workspace: str, environment:
         context=context,
     )
 
+    app: Any | None = None
     app_id: str | None = None
     call_id: str | None = None
     phase = "modal_identity"
@@ -335,7 +336,7 @@ def _launch(plan: pilot.PilotPlan, *, profile: str, workspace: str, environment:
             gpu="A100-80GB",
             cpu=(4.0, 4.0),
             memory=(65536, 65536),
-            ephemeral_disk=30000,
+            ephemeral_disk=524288,
             min_containers=0,
             max_containers=1,
             buffer_containers=0,
@@ -346,7 +347,6 @@ def _launch(plan: pilot.PilotPlan, *, profile: str, workspace: str, environment:
             include_source=False,
             startup_timeout=REMOTE_STARTUP_TIMEOUT_SECONDS,
             timeout=REMOTE_TIMEOUT_SECONDS,
-            max_inputs=1,
         )(_remote_worker)
         phase = "modal_app_startup"
         with modal.enable_output(), app.run(environment_name=environment, detach=True):
@@ -370,10 +370,16 @@ def _launch(plan: pilot.PilotPlan, *, profile: str, workspace: str, environment:
             phase = "modal_observation"
             result_bytes = call.get()
     except Exception as exc:
+        if app_id is None and app is not None:
+            app_id_value = getattr(app, "app_id", None)
+            if isinstance(app_id_value, str) and app_id_value:
+                app_id = app_id_value
         failure = _failure_receipt(plan.run_id, phase, exc, app_id=app_id, call_id=call_id)
         _update_attempt_marker(
             attempt_path,
             status="modal_error",
+            app_id=app_id,
+            call_id=call_id,
             failure_stage=phase,
             last_error=remote.sanitize_failure(exc),
         )

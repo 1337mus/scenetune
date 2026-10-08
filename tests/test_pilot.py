@@ -341,8 +341,9 @@ def test_launch_requires_fresh_clearance_for_signed_clean_head_and_exact_plan(
         )
 
 
+@pytest.mark.parametrize("startup_failure", [False, True], ids=["worker-returned", "startup-error"])
 def test_launch_reserves_before_build_and_records_call_before_get(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_failure: bool
 ) -> None:
     from experiments import modal_pilot
 
@@ -392,6 +393,13 @@ def test_launch_reserves_before_build_and_records_call_before_get(
             assert marker["call_id"] is None
             return FakeCall()
 
+    class StartupFailureContext:
+        def __enter__(self) -> None:
+            raise RuntimeError("app startup failed")
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
     class FakeApp:
         app_id = "ap-test-app"
 
@@ -405,7 +413,7 @@ def test_launch_reserves_before_build_and_records_call_before_get(
         def run(self, *, environment_name: str, detach: bool) -> Any:
             assert environment_name == remote.ENVIRONMENT
             assert detach is True
-            return contextlib.nullcontext(self)
+            return StartupFailureContext() if startup_failure else contextlib.nullcontext(self)
 
     fake_modal = type(
         "FakeModal",
@@ -429,13 +437,24 @@ def test_launch_reserves_before_build_and_records_call_before_get(
         environment=remote.ENVIRONMENT,
     )
 
-    assert status == 0
     assert options["memory"] == (65536, 65536)
+    assert options["ephemeral_disk"] == 524288
     assert options["startup_timeout"] == 300
     assert options["timeout"] == 2700
     assert options["scaledown_window"] == 2
+    assert options["single_use_containers"] is True
+    assert "max_inputs" not in options
     assert options["retries"] == 0
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if startup_failure:
+        assert status == 1
+        failure = json.loads((plan.output_dir / modal_pilot.MODAL_FAILURE_NAME).read_text())
+        assert marker["app_id"] == failure["app_id"] == "ap-test-app"
+        assert marker["call_id"] is failure["call_id"] is None
+        assert marker["status"] == "modal_error"
+        assert failure["failure"]["stage"] == "modal_app_startup"
+        return
+    assert status == 0
     assert marker["app_id"] == "ap-test-app"
     assert marker["call_id"] == "fc-test-call"
     assert marker["status"] == "worker_returned"

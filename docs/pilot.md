@@ -60,13 +60,15 @@ The launcher then reserves `modal-attempt.json` exclusively before Modal identit
 | GPU | A100-80GB, one |
 | CPU | 4 physical cores |
 | Host memory | 64 GiB |
-| Ephemeral disk | 30 GB |
+| Ephemeral disk | 512 GiB (provider minimum) |
 | Startup timeout | 300 seconds |
 | Function timeout | 2,700 seconds |
 | Containers | One maximum, single-use, no warm or buffer containers |
 | Retries / inputs | 0 retries, one input |
 
 The app runs detached so its ID remains observable if the client disconnects. After the result or same-call recovery, root must explicitly stop the app and record the shutdown check. An unknown observation error requires inspecting the recorded call only; do not spawn another call.
+
+The 512 GiB disk maps to 25.6 GiB at Modal's 20:1 disk-to-memory ratio, below the existing 64 GiB memory request, so memory remains the resource bound used in the compute estimate.
 
 At the refreshed rates, using all 300 seconds of startup and all 2,700 seconds of function time estimates about $2.70 of compute, excluding image build and storage. The $15 allocation is not a hard provider dollar cap. No Modal app or GPU call was made while implementing or running CPU checks.
 
