@@ -1,0 +1,26 @@
+# Private planning and provider evidence
+.context/
+.research/
+# Credentials
+.env
+.env.*
+*.key
+*.pem
+secrets/
+# Generated datasets, model weights and outputs
+data/
+artifacts/
+outputs/
+checkpoints/
+hf_cache/
+*.safetensors
+*.pt
+*.pth
+# Local tools
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
