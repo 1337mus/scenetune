@@ -199,7 +199,7 @@ def _build_image(modal: Any, project_root: Path) -> Any:
     packages.append(f"imageio[ffmpeg]=={remote.RUNTIME_PINS['imageio']}")
     image = (
         modal.Image.debian_slim(python_version="3.12")
-        .env({"USE_HUB_KERNELS": "NO", "PYTHONPATH": "/root/src"})
+        .env({"USE_HUB_KERNELS": "NO"})
         .apt_install("git")
         .pip_install(*packages, extra_index_url=remote.TORCH_INDEX)
         .run_commands(
