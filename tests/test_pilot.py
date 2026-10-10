@@ -5,6 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import weakref
 import zipfile
 from datetime import UTC, datetime, timedelta
 from importlib import metadata
@@ -192,6 +193,139 @@ def test_failed_worker_bundle_preserves_bounded_progress_and_saved_artifact_subs
     assert receipt["progress"]["optimizer_updates"] == 8
     assert receipt["progress"]["optimizer_steps_attempted"] == 8
     assert receipt["progress"]["saved_artifacts"] == ["images/base.png"]
+
+
+def test_failed_worker_bundle_preserves_telemetry_measured_before_failure(
+    tmp_path: Path,
+) -> None:
+    from experiments import modal_pilot
+
+    bundle = remote._failure_bundle(
+        "pilot-001",
+        "adapter_reload",
+        RuntimeError("strict reload validation failed"),
+        {
+            "optimizer_updates": 8,
+            "optimizer_steps_attempted": 8,
+            "losses": [0.5] * 8,
+            "gradient_steps": [{"norm": 1.0}] * 8,
+            "elapsed_seconds": 42.0,
+            "training_seconds": 31.5,
+            "step_seconds": [3.1] * 8,
+            "max_allocated_gpu_bytes": 123456,
+            "changed_adapter_tensors": 200,
+            "max_parameter_delta": 0.125,
+        },
+        tmp_path,
+    )
+
+    receipt, _names = modal_pilot._validate_result_bundle(bundle, "pilot-001")
+
+    assert receipt["progress"]["training_seconds"] == 31.5
+    assert receipt["progress"]["step_seconds"] == [3.1] * 8
+    assert receipt["progress"]["max_allocated_gpu_bytes"] == 123456
+    assert receipt["progress"]["changed_adapter_tensors"] == 200
+    assert receipt["progress"]["max_parameter_delta"] == 0.125
+
+
+def test_failed_worker_bundle_leaves_unmeasured_telemetry_unknown(tmp_path: Path) -> None:
+    from experiments import modal_pilot
+
+    bundle = remote._failure_bundle(
+        "pilot-001",
+        "input_validation",
+        ValueError("invalid payload"),
+        {"elapsed_seconds": 1.25},
+        tmp_path,
+    )
+
+    receipt, _names = modal_pilot._validate_result_bundle(bundle, "pilot-001")
+
+    assert receipt["progress"]["worker_elapsed_seconds"] == 1.25
+    for key in (
+        "training_seconds",
+        "step_seconds",
+        "max_allocated_gpu_bytes",
+        "changed_adapter_tensors",
+        "max_parameter_delta",
+    ):
+        assert key not in receipt["progress"]
+
+
+def test_adapter_reload_uses_validated_loader_and_releases_model_after_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from product_scene_editor import reload_diagnostic
+
+    references: dict[str, Any] = {}
+    adapter_validation = {
+        "validated": True,
+        "restored_tensor_count": 2400,
+        "module_count": 100,
+    }
+    validation = {
+        "observed": {"pipe_training": False, "lora_dropout_training": []},
+        "mode_changed": False,
+        "adapter_validation": adapter_validation,
+    }
+
+    class FakeImage:
+        converted_to: str | None = None
+
+        def convert(self, mode: str) -> FakeImage:
+            self.converted_to = mode
+            return self
+
+    class FakeModel:
+        pass
+
+    def fake_loader(
+        snapshot_dirs: dict[str, Path], adapter_path: Path, torch: Any
+    ) -> tuple[object, object, dict[str, Any]]:
+        assert snapshot_dirs == {"transformer": tmp_path / "model"}
+        assert adapter_path == tmp_path / "step-8.safetensors"
+        assert torch is fake_torch
+        model = FakeModel()
+        references["model"] = weakref.ref(model)
+        return model, object(), validation
+
+    class FakeCuda:
+        empty_cache_calls = 0
+
+        def empty_cache(self) -> None:
+            self.empty_cache_calls += 1
+
+    fake_cuda = FakeCuda()
+    fake_torch = type("FakeTorch", (), {"cuda": fake_cuda})()
+    monkeypatch.setattr(reload_diagnostic, "_load_replay_model", fake_loader)
+
+    def fake_generate(pipe: object, _prompt: str, _reference: object, _seed: int) -> FakeImage:
+        assert references["model"]() is not None
+        assert pipe is not None
+        return FakeImage()
+
+    monkeypatch.setattr(remote, "_generate", fake_generate)
+
+    image, receipt_fields = remote._reload_and_generate(
+        {"transformer": tmp_path / "model"},
+        tmp_path / "step-8.safetensors",
+        "product edit",
+        object(),
+        7321,
+        fake_torch,
+    )
+
+    assert image.converted_to == "RGB"
+    assert references["model"]() is None
+    assert fake_cuda.empty_cache_calls == 1
+    assert receipt_fields == {
+        "adapter_validation": adapter_validation,
+        "load_method": (
+            "Flux2ImageTrainingModule state conversion and mapping followed by "
+            "pipe.dit.load_state_dict(strict=False), with exact restored LoRA "
+            "tensor and module validation"
+        ),
+    }
 
 
 def test_modal_attempt_marker_is_exclusive_and_binds_plan(tmp_path: Path) -> None:

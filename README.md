@@ -6,16 +6,17 @@ The goal: change a product photo's background while keeping its shape, color and
 
 ## Status
 
-**Pilot R3 failed at saved-adapter reload after eight updates. No image-quality improvement is established.**
+**R3 completed eight training updates, then failed at adapter reload. A follow-up check found a working reload method. The complete training-and-reload run still needs verification.**
 
 | Evidence | Result |
 |---|---|
-| Reload parity | Failed: average channel difference 7.82 /255 (limit 2); 25.8% of pixels differ by >8 (limit 1%) |
-| Runtime | 129 seconds including downloads, generations, and training; no peak-memory or isolated training-time result |
-| Review | [R3 report](docs/pilot-result-2026-10-08.md) · [contact sheet](docs/assets/pilot-r3/contact-sheet.png) |
-| Next step | Diagnose saved-adapter reload mismatch before any further training; R3 was not retried |
+| R3 training | Failed after eight updates at adapter reload; see the [original R3 report](docs/pilot-result-2026-10-08.md) |
+| Reload diagnostic | Separate-weight loads matched exactly; combined weights still fail the same parity limits, with zero training updates |
+| Quality | No improvement or real-photo performance is established |
+| Reports | [Reload diagnostic](docs/reload-result-2026-10-09.md) · [R3 contact sheet](docs/assets/pilot-r3/contact-sheet.png) |
+| Next step | Use the working separate-weight reload in a fresh eight-update training pilot |
 
-This run checks the synthetic training pipeline only. It does not establish performance on real product photography.
+The diagnostic used the synthetic pipeline only. It does not validate image quality.
 
 ## What we will compare
 

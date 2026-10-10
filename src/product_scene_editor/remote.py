@@ -246,6 +246,27 @@ def _failure_bundle(
                 except ValueError:
                     continue
                 saved_artifacts[name] = content
+    failure_progress: dict[str, Any] = {
+        "optimizer_updates": min(int(progress.get("optimizer_updates", 0)), TRAINING_STEPS),
+        "optimizer_steps_attempted": min(
+            int(progress.get("optimizer_steps_attempted", 0)), TRAINING_STEPS
+        ),
+        "losses": list(progress.get("losses", []))[:TRAINING_STEPS],
+        "gradient_steps": list(progress.get("gradient_steps", []))[:TRAINING_STEPS],
+        "saved_artifacts": list(saved_artifacts),
+        "worker_elapsed_seconds": max(0.0, float(progress.get("elapsed_seconds", 0.0))),
+    }
+    for key in (
+        "training_seconds",
+        "step_seconds",
+        "max_allocated_gpu_bytes",
+        "changed_adapter_tensors",
+        "max_parameter_delta",
+    ):
+        if key in progress and progress[key] is not None:
+            value = progress[key]
+            failure_progress[key] = list(value)[:TRAINING_STEPS] if key == "step_seconds" else value
+
     receipt = {
         "schema_version": 1,
         "run_id": run_id,
@@ -255,16 +276,7 @@ def _failure_bundle(
             "type": type(error).__name__,
             "message": sanitize_failure(error),
         },
-        "progress": {
-            "optimizer_updates": min(int(progress.get("optimizer_updates", 0)), TRAINING_STEPS),
-            "optimizer_steps_attempted": min(
-                int(progress.get("optimizer_steps_attempted", 0)), TRAINING_STEPS
-            ),
-            "losses": list(progress.get("losses", []))[:TRAINING_STEPS],
-            "gradient_steps": list(progress.get("gradient_steps", []))[:TRAINING_STEPS],
-            "saved_artifacts": list(saved_artifacts),
-            "worker_elapsed_seconds": max(0.0, float(progress.get("elapsed_seconds", 0.0))),
-        },
+        "progress": failure_progress,
         "recorded_at_utc": datetime.now(UTC).isoformat(),
     }
     artifacts = {
@@ -470,6 +482,38 @@ def _generate(pipe: Any, prompt: str, reference: Any, seed: int) -> Any:
     )
 
 
+RELOAD_LOAD_METHOD = (
+    "Flux2ImageTrainingModule state conversion and mapping followed by "
+    "pipe.dit.load_state_dict(strict=False), with exact restored LoRA "
+    "tensor and module validation"
+)
+
+
+def _reload_and_generate(
+    snapshot_dirs: dict[str, Path],
+    adapter_path: Path,
+    prompt: str,
+    reference: Any,
+    seed: int,
+    torch: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Load through the strict diagnostic path and keep its model alive through inference."""
+    from .reload_diagnostic import _load_replay_model
+
+    reload_model, reloaded_pipe, validation = _load_replay_model(snapshot_dirs, adapter_path, torch)
+    try:
+        reloaded_image = _generate(reloaded_pipe, prompt, reference, seed).convert("RGB")
+        receipt_fields = {
+            "adapter_validation": validation["adapter_validation"],
+            "load_method": RELOAD_LOAD_METHOD,
+        }
+        return reloaded_image, receipt_fields
+    finally:
+        del reloaded_pipe, reload_model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
 def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
     """Train and verify one adapter, returning a bounded self-contained result archive."""
     stage = "input_validation"
@@ -667,6 +711,9 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 now = time.monotonic()
                 self.step_seconds.append(now - self.last_step_time)
                 self.last_step_time = now
+                progress["step_seconds"] = self.step_seconds
+                progress["training_seconds"] = max(0.0, now - training_started)
+                progress["max_allocated_gpu_bytes"] = int(torch.cuda.max_memory_allocated())
                 super().on_step_end(accelerator, model, save_steps, **kwargs)
 
         logger = _CheckedLogger(str(output_dir), remove_prefix_in_ckpt="pipe.dit.")
@@ -688,7 +735,9 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         )()
 
         stage = "training"
+        torch.cuda.synchronize()
         training_started = time.monotonic()
+        training_finished = False
         launch_training_task(
             accelerator,
             training_dataset,
@@ -696,7 +745,12 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
             logger,
             args=training_args,
         )
+        torch.cuda.synchronize()
         training_seconds = time.monotonic() - training_started
+        progress["training_seconds"] = training_seconds
+        progress["step_seconds"] = logger.step_seconds
+        progress["max_allocated_gpu_bytes"] = int(torch.cuda.max_memory_allocated())
+        training_finished = True
         if logger.steps != TRAINING_STEPS or len(grad_steps) != TRAINING_STEPS:
             raise RuntimeError("DiffSynth completed an unexpected number of optimizer updates")
         adapter_path = output_dir / "step-8.safetensors"
@@ -715,8 +769,13 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         if set(initial) != set(final):
             raise RuntimeError("trainable adapter parameter set changed during training")
         changed = [name for name in initial if not torch.equal(initial[name], final[name])]
+        progress["changed_adapter_tensors"] = len(changed)
         if not changed:
             raise RuntimeError("LoRA parameters did not change during the eight updates")
+        max_parameter_delta = max(
+            float((final[name] - initial[name]).abs().max().item()) for name in changed
+        )
+        progress["max_parameter_delta"] = max_parameter_delta
 
         stage = "trained_generation"
         trained_pipe = trained_model.pipe
@@ -747,10 +806,8 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         torch.cuda.empty_cache()
 
         stage = "adapter_reload"
-        reloaded_pipe = _load_pipe(downloaded, "cuda")
-        reloaded_pipe.load_lora(reloaded_pipe.dit, str(adapter_path))
-        reloaded_image = _generate(reloaded_pipe, dev_row["prompt"], reference, seed=7321).convert(
-            "RGB"
+        reloaded_image, reload_receipt_fields = _reload_and_generate(
+            downloaded, adapter_path, dev_row["prompt"], reference, 7321, torch
         )
         reloaded_image.save(work_root / "reloaded.png", format="PNG", optimize=True)
         progress["saved_artifacts"] = [
@@ -759,7 +816,6 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
             "images/trained.png",
             "images/reloaded.png",
         ]
-        del reloaded_pipe
         torch.cuda.empty_cache()
         trained_again = Image.open(work_root / "trained.png").convert("RGB")
         difference = ImageChops.difference(trained_again, reloaded_image)
@@ -807,9 +863,7 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 "losses": logger.losses,
                 "gradient_steps": grad_steps,
                 "changed_adapter_tensors": len(changed),
-                "max_parameter_delta": max(
-                    float((final[name] - initial[name]).abs().max().item()) for name in changed
-                ),
+                "max_parameter_delta": max_parameter_delta,
                 "training_seconds": training_seconds,
                 "step_seconds": logger.step_seconds,
             },
@@ -820,6 +874,7 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 "max_absolute_pixel_error": max_abs_error,
                 "fraction_of_pixels_over_8": fraction_over_8,
                 "tolerance": {"mean_absolute_pixel_error_max": 2.0, "fraction_over_8_max": 0.01},
+                **reload_receipt_fields,
             },
             "resources": {
                 "gpu": torch.cuda.get_device_name(0),
@@ -839,6 +894,14 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         return _bundle(artifacts)
     except Exception as exc:
         progress["elapsed_seconds"] = time.monotonic() - started
+        if "training_started" in locals() and not training_finished:
+            progress["training_seconds"] = max(0.0, time.monotonic() - training_started)
+        if "torch" in locals():
+            try:
+                torch.cuda.synchronize()
+                progress["max_allocated_gpu_bytes"] = int(torch.cuda.max_memory_allocated())
+            except Exception:
+                pass
         if isinstance(exc, _WorkerFailure):
             stage = exc.stage
             error = exc.cause
