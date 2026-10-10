@@ -1,54 +1,104 @@
 # Product Scene Editor
 
-A small experiment in reference-image editing with **FLUX.2 Klein Base 4B**.
+A reference-image editing experiment with **FLUX.2 Klein Base 4B** and a trained LoRA adapter.
 
-The goal: change a product photo's background while keeping its shape, color and label intact.
+The goal is to change a product image’s background while keeping the product intact.
+The first study uses original synthetic packaging images. Real-photo performance is untested.
 
-## Status
+## Latest result
 
-**R4 passed a fresh eight-update synthetic training run and exact saved-adapter reload check.** It repeats R3’s eight-update schedule from the base model; it is not eight additional updates to R3. Pipeline behavior is verified, while image quality remains unvalidated.
+**Training reduced pixel error on all nine development examples.**
+The original model and trained adapter used the same source images, prompts and random seed.
 
-| Evidence | Result |
+| Measure | Original model | Trained adapter | Change |
+|---|---:|---:|---:|
+| Average product-pixel error | 58.00 | 11.93 | 79.4% lower; better in 9/9 cases |
+| Average background error against the target | 64.80 | 17.19 | 73.5% lower; better in 9/9 cases |
+| Product pixels changed by more than 8 color levels | 99.21% | 91.90% | Lower in 8/9 cases; higher in 1/9 |
+| Saved-adapter replay | — | Exact match in 9/9 cases | Zero pixel difference after reload |
+
+Error is the average absolute RGB channel difference on a 0–255 scale. Lower is better.
+Product error compares with the source; background error compares with the synthetic target.
+The figures are equal-weight averages across nine examples from three products kept out of training.
+
+The adapter learned our flat, synthetic target style. The original model produced more photographic scenes.
+Lower pixel error here does not establish better photos. The development products were new, but the background styles appeared in training.
+
+**The product is still not preserved exactly.** Many pixels change even after training.
+These checks do not measure label readability, image realism or performance on real photos.
+There is no claim of beating other image models.
+
+[Read the full study and see all nine examples](docs/matched-study-result-2026-10-09.md).
+
+![Three scenes for one development product: source, target, original model, trained adapter](docs/assets/matched-study-2026-10-09/pack-006.png)
+
+## What we built
+
+- A paired dataset with source images, target images and product masks.
+- Separate product identities for training, development and reserved tests.
+- A bounded Modal training job with pinned code, data and model components.
+- Adapter saving and strict loading into a fresh model.
+- Matched image generation and an independent check of the weights, training records and scores.
+
+The laptop runs CPU checks only. Model downloads, generation and training run on Modal.
+No employer data or paid LLM-generated labels are used.
+
+## Training run
+
+| Item | Result |
 |---|---|
-| R3 reload | Original R3 training stopped at adapter reload. A separate-weight diagnostic matched exactly; combined weights still fail the frozen parity limits. See the [R3 report](docs/pilot-result-2026-10-08.md) and [reload diagnostic](docs/reload-result-2026-10-09.md). |
-| R4 training and reload | 8 optimizer updates; 200 saved tensors across 100 modules restored exactly. Trained and reloaded outputs match pixel-for-pixel. See the [R4 report](docs/pilot-result-2026-10-09-r4.md) and [contact sheet](docs/assets/pilot-r4/contact-sheet.png). |
-| Quality | Base and trained outputs differ (average color change 8.60 on a 0–255 scale; 27.64% of pixels differ by more than 8 on that scale). That shows output change only; no quality gain or real-photo performance is established. |
-| Runtime and cost | App stopped with 0 tasks and 0 active apps. Actual R4 charge is unknown; the workspace meter is delayed and revisable. |
-| Next | Train one new adapter on the larger 18-pair training split, then compare the base and adapter on all 9 development pairs with source, prompt, and seed matched. No new run has been launched. |
+| Training data | 18 pairs from 6 products |
+| Development data | 9 pairs from 3 different products |
+| Reserved tests | 9 pairs from 3 more products; still closed |
+| Training | 8 passes over the data; 144 updates; one adapter |
+| LoRA | Rank 32; 48,168,960 learned values across 100 modules |
+| Training checks | All 144 losses finite; all 144 gradient records finite and nonzero |
+| Saved weights | 200 tensors restored; all 200 changed during training |
+| Image settings | 512×512; seed 7321; 16 steps; guidance 4; 27 total generations |
+| Training time | 176.13 seconds |
+| Worker time | 489.91 seconds through receipt creation; excludes archive packing |
+| Peak memory allocated by Torch | 17.55 GiB; not total GPU memory |
+| Compute | One A100-80GB; one call; zero retries |
+| Shutdown | Direct check confirmed stopped, zero tasks, no active apps |
 
-R3 and R4 used the synthetic pipeline only. Neither run establishes image quality on real product photography.
+[Training design](docs/matched-study.md) · [Pinned trainer and model components](docs/trainer-contract.md)
 
-## What we will compare
+## Cost
 
-| Version | Purpose |
+The pilot allowance is **$15**. The larger $100–$150 experiment budget has not been used.
+
+| Cost evidence | Amount |
+|---|---:|
+| Estimate at the full configured time limit | $2.66544 |
+| Delayed gross workspace meter after the study | $5.35417914 |
+| Net workspace bill after credits at that check | $0 |
+| Final charge for this run | Unknown |
+
+The workspace meter includes earlier work. It can lag and change.
+The estimate excludes build, storage, transfer, idle grace and tax. It is not a provider spending cap.
+Assistant-token costs are separate and are not included here.
+
+## Earlier runs and failures
+
+| Run | What it established |
 |---|---|
-| Original model | Establish what the released model can already do |
-| Model with a trained LoRA adapter | Measure what the training changes |
+| R1 / R2 | Provider configuration failures before GPU inputs; evidence retained privately |
+| [R3](docs/pilot-result-2026-10-08.md) | Eight training updates worked, but the saved-adapter replay failed |
+| [Reload diagnostic](docs/reload-result-2026-10-09.md) | Separate-weight loading matched exactly; combined-weight loading failed the fixed limits |
+| [R4](docs/pilot-result-2026-10-09-r4.md) | Fresh eight-update training and exact replay passed; no quality improvement established |
+| Latest 144-update study | Better synthetic pixel scores; exact replay; all nine cases reported |
 
-Both versions will use the same prompts, reference images and random seeds.
-We will show failures alongside successful edits.
+The latest launcher reported a shutdown-confirmation error after the worker passed.
+The first independent closure check also failed on the CLI’s workspace-name format.
+A corrected read-only check then confirmed the app was stopped with zero tasks. Both errors remain recorded.
 
-## Next bounded study
+## Next
 
-- Train one new adapter on the larger 18-pair training split.
-- Compare the base model and this adapter on all 9 development pairs with the same source, prompt, and seed for each pair.
-- Predefine checks for product shape, label readability, and the requested background; report all cases and failures.
-- The brief remains under review. No new run has been launched.
-
-## Budget
-
-The first pilot has a $15 compute allowance. The proposed full experiment allowance is $100–$150.
-These are allocations, not measured bills or provider-enforced caps.
-
-## Models and data
-
-- [FLUX.2 Klein Base 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B).
-- Original procedural packaging data. No employer data or paid LLM-generated captions.
-- [Pinned DiffSynth training software and model components](docs/trainer-contract.md).
+Measure label readability and performance on licensed or owned real product photos.
+Do that before spending on a larger training run. Keep the reserved synthetic test set closed during tuning.
+Correct the launcher’s shutdown handling before more GPU work.
 
 ## Development
-
-The laptop tools run on the CPU. Model weights and training stay on Modal.
 
 ```sh
 uv sync --locked
@@ -60,3 +110,5 @@ uv run --locked mypy src
 
 Code: MIT. Model components keep their upstream licenses.
 Original generated dataset images: CC0-1.0.
+
+Model: [FLUX.2 Klein Base 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B).
