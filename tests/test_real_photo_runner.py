@@ -536,14 +536,20 @@ def _write_pending_plan_fixture(root, monkeypatch):
         "OFF-R1-005": ["kinder", "bueno"],
         "OFF-R1-006": ["QUAKER", "Cruesli", "MÉLANGE DE NOIX"],
     }
+    source_files = {
+        "OFF-R1-003": ("8076800195057", "barilla", "off-8076800195057-front_en-400.jpg"),
+        "OFF-R1-005": ("8000500037560", "kinder", "off-8000500037560-front_en-400.jpg"),
+        "OFF-R1-006": ("3168930010883", "cruesli", "off-3168930010883-front_fr-400.jpg"),
+    }
     collection_digest = "e" * 64
     source_rows = []
     preparation_cases = []
     source_assets = {}
     for index, case_id in enumerate(photo_runner.CASE_IDS):
-        source_path = f"dev/source/{case_id}.jpg"
-        derived_path = f"dev/prepared/images/{case_id}.png"
-        mask_path = f"dev/prepared/masks/{case_id}.png"
+        product_id, family_id, source_name = source_files[case_id]
+        source_path = f"dev/source/{source_name}"
+        derived_path = f"dev/prepared-r1/images/{case_id}.png"
+        mask_path = f"dev/prepared-r1/masks/{case_id}-product-mask.png"
         source = f"source bytes {case_id}".encode()
         derived_stream = BytesIO()
         Image.new("RGB", (512, 512), (index, 2, 3)).save(derived_stream, format="PNG")
@@ -566,8 +572,8 @@ def _write_pending_plan_fixture(root, monkeypatch):
             "split": "dev",
             "sha256": source_digest,
             "source_path": source_path,
-            "product_id": f"product-{index}",
-            "family_id": f"family-{index}",
+            "product_id": product_id,
+            "family_id": f"off-brand:{family_id}",
             "rights_review": "pending",
         }
         source_rows.append(photo)
@@ -615,6 +621,7 @@ def _write_pending_plan_fixture(root, monkeypatch):
     preparation = {
         "schema_version": 1,
         "input_intake": {
+            "path": "data/real-photos-off-r1/intake.json",
             "active_sha256": hashlib.sha256(intake_bytes).hexdigest(),
             "collection_original_sha256": collection_digest,
         },
@@ -676,8 +683,9 @@ def _write_pending_plan_fixture(root, monkeypatch):
             }
         )
     )
+    asset_root = intake_path.parent
     for relative, content in source_assets.items():
-        path = root / relative
+        path = asset_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 
@@ -707,6 +715,15 @@ def test_plan_keeps_pending_geometry_review_pending_and_bound(tmp_path, monkeypa
     from product_scene_editor import real_photo_runner as photo_runner
 
     intake_bytes, geometry_bytes = _write_pending_plan_fixture(tmp_path, monkeypatch)
+    preparation = json.loads((tmp_path / ".context/real-photo-preparation.json").read_text())
+    asset_parent = tmp_path / "data/real-photos-off-r1"
+    assert preparation["input_intake"]["path"] == photo_runner.INTAKE_RELATIVE_PATH
+    assert all(
+        (asset_parent / case[key]["path"]).is_file()
+        for case in preparation["cases"]
+        for key in ("source", "derived", "mask")
+    )
+    assert not (tmp_path / "dev").exists()
     plan = photo_runner.create_real_photo_plan(
         tmp_path,
         tmp_path / "artifacts/plans/pending-plan",
@@ -723,6 +740,53 @@ def test_plan_keeps_pending_geometry_review_pending_and_bound(tmp_path, monkeypa
     assert manifest["quality_review_status"] == "pending_human_geometry_review"
     assert plan["geometry_review_sha256"] == expected_review_digest
     assert plan["quality_review_status"] == "pending_human_geometry_review"
+
+
+def test_plan_rejects_preparation_bound_to_a_different_intake_path(tmp_path, monkeypatch) -> None:
+    import json
+
+    import pytest
+
+    from product_scene_editor import real_photo_runner as photo_runner
+
+    _write_pending_plan_fixture(tmp_path, monkeypatch)
+    preparation_path = tmp_path / ".context/real-photo-preparation.json"
+    preparation = json.loads(preparation_path.read_text())
+    preparation.pop("aggregate_sha256")
+    preparation["input_intake"]["path"] = "data/other/intake.json"
+    preparation["aggregate_sha256"] = photo_runner.canonical_sha256(preparation)
+    preparation_path.write_bytes(photo_runner.canonical_json_bytes(preparation) + b"\n")
+    output_path = tmp_path / "artifacts/plans/mismatched-intake"
+
+    with pytest.raises(ValueError, match="preparation intake path does not match"):
+        photo_runner.create_real_photo_plan(
+            tmp_path,
+            output_path,
+            run_id="mismatched-intake",
+            adapter_archive=tmp_path / "unused-adapter.zip",
+        )
+    assert not output_path.exists()
+
+
+def test_private_asset_reader_keeps_traversal_and_symlink_guards(tmp_path) -> None:
+    import pytest
+
+    from product_scene_editor.real_photo_runner import (
+        INTAKE_ASSET_PREFIX,
+        _read_private_file,
+    )
+
+    root = tmp_path / "project"
+    source_dir = root / INTAKE_ASSET_PREFIX / "dev/source"
+    source_dir.mkdir(parents=True)
+    real_file = source_dir / "real.jpg"
+    real_file.write_bytes(b"source")
+    (source_dir / "alias.jpg").symlink_to(real_file)
+
+    with pytest.raises(ValueError, match="unsafe private asset path"):
+        _read_private_file(root, "../outside.jpg", from_intake_parent=True)
+    with pytest.raises(ValueError, match="may not pass through symlinks"):
+        _read_private_file(root, "dev/source/alias.jpg", from_intake_parent=True)
 
 
 def test_worker_receipt_binds_all_seven_generations_and_two_strict_loads(monkeypatch) -> None:

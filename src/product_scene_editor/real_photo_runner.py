@@ -15,6 +15,8 @@ from typing import Any, TypedDict
 from PIL import Image, ImageOps
 
 CASE_IDS = ("OFF-R1-003", "OFF-R1-005", "OFF-R1-006")
+INTAKE_RELATIVE_PATH = "data/real-photos-off-r1/intake.json"
+INTAKE_ASSET_PREFIX = PurePosixPath(INTAKE_RELATIVE_PATH).parent
 PROMPT = (
     "Replace only the background with a light stone counter and a softly blurred kitchen. "
     "Keep the visible package, text, logos, shape, size, orientation and position unchanged. "
@@ -753,7 +755,7 @@ def _read_json_file(
     return value, data
 
 
-def _read_private_file(root: Path, relative: object) -> bytes:
+def _read_private_file(root: Path, relative: object, *, from_intake_parent: bool = False) -> bytes:
     if not isinstance(relative, str):
         raise ValueError("preparation asset path must be a relative string")
     posix = PurePosixPath(relative)
@@ -765,7 +767,8 @@ def _read_private_file(root: Path, relative: object) -> bytes:
         or ".." in posix.parts
     ):
         raise ValueError("preparation contains an unsafe private asset path")
-    candidate = root.joinpath(*posix.parts)
+    asset_path = INTAKE_ASSET_PREFIX / posix if from_intake_parent else posix
+    candidate = root.joinpath(*asset_path.parts)
     try:
         resolved_root = root.resolve(strict=True)
         resolved = candidate.resolve(strict=True)
@@ -826,7 +829,7 @@ def create_real_photo_plan(
         raise ValueError("private real-photo plan must be inside the project root") from exc
     if output.exists() or output.is_symlink():
         raise FileExistsError("real-photo plan directory already exists")
-    intake_path = root / "data/real-photos-off-r1/intake.json"
+    intake_path = root / INTAKE_RELATIVE_PATH
     preparation_path = root / ".context/real-photo-preparation.json"
     review_path = root / ".context/real-photo-source-geometry-review.json"
     label_path = root / ".context/real-photo-label-confirmation.json"
@@ -837,6 +840,9 @@ def create_real_photo_plan(
     label_confirmation, label_bytes = _read_json_file(label_path)
     source_review, source_review_bytes = _read_json_file(source_review_path)
     exclusions, _exclusions_bytes = _read_json_file(exclusions_path)
+    input_intake = preparation.get("input_intake")
+    if not isinstance(input_intake, dict) or input_intake.get("path") != INTAKE_RELATIVE_PATH:
+        raise ValueError("preparation intake path does not match the fixed active intake")
     if (
         source_review.get("approved_for_private_inference") is not True
         or source_review.get("human_rights_review") is not False
@@ -876,9 +882,9 @@ def create_real_photo_plan(
     for case in preparation["cases"]:
         case_id = case["case_id"]
         photo = intake_photos[case_id]
-        source = _read_private_file(root, case["source"]["path"])
-        prepared = _read_private_file(root, case["derived"]["path"])
-        mask = _read_private_file(root, case["mask"]["path"])
+        source = _read_private_file(root, case["source"]["path"], from_intake_parent=True)
+        prepared = _read_private_file(root, case["derived"]["path"], from_intake_parent=True)
+        mask = _read_private_file(root, case["mask"]["path"], from_intake_parent=True)
         for content, expected, label in (
             (source, case["source"]["sha256"], "source"),
             (prepared, case["derived"]["sha256"], "derived"),
