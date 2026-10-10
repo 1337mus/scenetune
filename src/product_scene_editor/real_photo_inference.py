@@ -59,7 +59,7 @@ def _observed_diffsynth_commit() -> str:
 
 
 def _runtime_versions() -> dict[str, str]:
-    import modal
+    modal = importlib.import_module("modal")
 
     modal_version = getattr(modal, "__version__", None)
     if not isinstance(modal_version, str) or not modal_version.strip():
