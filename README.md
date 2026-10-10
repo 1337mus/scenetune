@@ -6,17 +6,17 @@ The goal: change a product photo's background while keeping its shape, color and
 
 ## Status
 
-**R3 completed eight training updates, then failed at adapter reload. A follow-up check found a working reload method. The complete training-and-reload run still needs verification.**
+**R4 passed a fresh eight-update synthetic training run and exact saved-adapter reload check.** It repeats R3’s eight-update schedule from the base model; it is not eight additional updates to R3. Pipeline behavior is verified, while image quality remains unvalidated.
 
 | Evidence | Result |
 |---|---|
-| R3 training | Failed after eight updates at adapter reload; see the [original R3 report](docs/pilot-result-2026-10-08.md) |
-| Reload diagnostic | Separate-weight loads matched exactly; combined weights still fail the same parity limits, with zero training updates |
-| Quality | No improvement or real-photo performance is established |
-| Reports | [Reload diagnostic](docs/reload-result-2026-10-09.md) · [R3 contact sheet](docs/assets/pilot-r3/contact-sheet.png) |
-| Next step | Use the working separate-weight reload in a fresh eight-update training pilot |
+| R3 reload | Original R3 training stopped at adapter reload. A separate-weight diagnostic matched exactly; combined weights still fail the frozen parity limits. See the [R3 report](docs/pilot-result-2026-10-08.md) and [reload diagnostic](docs/reload-result-2026-10-09.md). |
+| R4 training and reload | 8 optimizer updates; 200 saved tensors across 100 modules restored exactly. Trained and reloaded outputs match pixel-for-pixel. See the [R4 report](docs/pilot-result-2026-10-09-r4.md) and [contact sheet](docs/assets/pilot-r4/contact-sheet.png). |
+| Quality | Base and trained outputs differ (average color change 8.60 on a 0–255 scale; 27.64% of pixels differ by more than 8 on that scale). That shows output change only; no quality gain or real-photo performance is established. |
+| Runtime and cost | App stopped with 0 tasks and 0 active apps. Actual R4 charge is unknown; the workspace meter is delayed and revisable. |
+| Next | Train one new adapter on the larger 18-pair training split, then compare the base and adapter on all 9 development pairs with source, prompt, and seed matched. No new run has been launched. |
 
-The diagnostic used the synthetic pipeline only. It does not validate image quality.
+R3 and R4 used the synthetic pipeline only. Neither run establishes image quality on real product photography.
 
 ## What we will compare
 
@@ -28,12 +28,12 @@ The diagnostic used the synthetic pipeline only. It does not validate image qual
 Both versions will use the same prompts, reference images and random seeds.
 We will show failures alongside successful edits.
 
-## Planned evidence
+## Next bounded study
 
-- Unseen product identities kept out of training.
-- Product shape, label and requested edit checks.
-- Saved-adapter reload and real parameter-update checks.
-- Generation time, memory use and compute cost.
+- Train one new adapter on the larger 18-pair training split.
+- Compare the base model and this adapter on all 9 development pairs with the same source, prompt, and seed for each pair.
+- Predefine checks for product shape, label readability, and the requested background; report all cases and failures.
+- The brief remains under review. No new run has been launched.
 
 ## Budget
 
