@@ -200,3 +200,154 @@ def test_restored_adapter_values_require_exact_keys_shapes_dtypes_and_values() -
                 lambda left, right: left[2] == right[2],
                 expected_module_count=1,
             )
+
+
+def test_plan_only_cli_never_uses_modal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from experiments import modal_reload_diagnostic as launcher
+
+    source, result = _r3_sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        launcher.remote,
+        "verify_modal_identity",
+        lambda **_kwargs: pytest.fail("Modal identity queried"),
+    )
+
+    status = launcher.main(
+        [
+            "--input-archive",
+            str(source),
+            "--result-archive",
+            str(result),
+            "--plan-dir",
+            str(tmp_path / "plan"),
+        ]
+    )
+
+    assert status == 0
+    assert '"modal_called": false' in capsys.readouterr().out
+
+
+def test_clearance_requires_fresh_matching_head_and_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from experiments import modal_reload_diagnostic as launcher
+
+    source, result = _r3_sources(tmp_path, monkeypatch)
+    plan = diagnostic.plan_reload_diagnostic(source, result, tmp_path / "plan")
+    context = {
+        "profile": diagnostic.remote.PROFILE,
+        "workspace": diagnostic.remote.WORKSPACE,
+        "environment": diagnostic.remote.ENVIRONMENT,
+    }
+    head = "a" * 40
+    dirty = [False]
+    verify_failure = [False]
+
+    def git_result(_root: Path, args: list[str]) -> Any:
+        if args[0] == "status":
+            return SimpleNamespace(returncode=0, stdout=" M file" if dirty[0] else "")
+        if args[0] == "verify-commit" and verify_failure[0]:
+            raise ValueError("clearance could not verify the local Git state")
+        return SimpleNamespace(returncode=0, stdout=head)
+
+    monkeypatch.setattr(launcher, "_run_local_git", git_result)
+    now = datetime.now(UTC)
+    clearance = {
+        "schema_version": 1,
+        "run_id": plan.run_id,
+        "payload_sha256": plan.payload_sha256,
+        "plan_sha256": hashlib.sha256(
+            (plan.output_dir / diagnostic.RUN_MARKER_NAME).read_bytes()
+        ).hexdigest(),
+        "source_input_sha256": diagnostic.R3_INPUT_SHA256,
+        "source_result_sha256": diagnostic.R3_RESULT_SHA256,
+        "status": "approved",
+        "review_status": "approved",
+        "ci_status": "success",
+        "allowance_usd": 15,
+        "gpu": "A100-80GB",
+        "max_runtime_seconds": 1200,
+        "max_calls": 1,
+        **context,
+        "source_commit": head,
+        "checked_at": now.isoformat(),
+    }
+    path = tmp_path / "clearance.json"
+    path.write_text(json.dumps(clearance), encoding="utf-8")
+
+    assert launcher._validate_clearance(
+        plan, project_root=tmp_path, clearance_path=path, context=context, now=now
+    )
+    with pytest.raises(ValueError, match="missing or unsafe"):
+        launcher._validate_clearance(
+            plan,
+            project_root=tmp_path,
+            clearance_path=tmp_path / "missing.json",
+            context=context,
+            now=now,
+        )
+    clearance["checked_at"] = (now - timedelta(minutes=31)).isoformat()
+    path.write_text(json.dumps(clearance), encoding="utf-8")
+    with pytest.raises(ValueError, match="stale"):
+        launcher._validate_clearance(
+            plan, project_root=tmp_path, clearance_path=path, context=context, now=now
+        )
+    clearance["checked_at"] = now.isoformat()
+    clearance["source_commit"] = "b" * 40
+    path.write_text(json.dumps(clearance), encoding="utf-8")
+    with pytest.raises(ValueError, match="HEAD"):
+        launcher._validate_clearance(
+            plan, project_root=tmp_path, clearance_path=path, context=context, now=now
+        )
+    wrong_context = {**context, "environment": "wrong"}
+    with pytest.raises(ValueError, match="clearance"):
+        launcher._validate_clearance(
+            plan, project_root=tmp_path, clearance_path=path, context=wrong_context, now=now
+        )
+    clearance["source_commit"] = head
+    path.write_text(json.dumps(clearance), encoding="utf-8")
+    dirty[0] = True
+    with pytest.raises(ValueError, match="clean worktree"):
+        launcher._validate_clearance(
+            plan, project_root=tmp_path, clearance_path=path, context=context, now=now
+        )
+    dirty[0] = False
+    verify_failure[0] = True
+    with pytest.raises(ValueError, match="Git state"):
+        launcher._validate_clearance(
+            plan, project_root=tmp_path, clearance_path=path, context=context, now=now
+        )
+
+
+def test_attempt_marker_is_reserved_before_provider_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from experiments import modal_reload_diagnostic as launcher
+
+    source, result = _r3_sources(tmp_path, monkeypatch)
+    plan = diagnostic.plan_reload_diagnostic(source, result, tmp_path / "plan")
+    context = {
+        "profile": diagnostic.remote.PROFILE,
+        "workspace": diagnostic.remote.WORKSPACE,
+        "environment": diagnostic.remote.ENVIRONMENT,
+    }
+    monkeypatch.setattr(
+        launcher, "_validate_clearance", lambda *_args, **_kwargs: {"source_commit": "a" * 40}
+    )
+
+    def identity(**_kwargs: Any) -> None:
+        assert (plan.output_dir / diagnostic.ATTEMPT_MARKER_NAME).is_file()
+        raise RuntimeError("stop before provider work")
+
+    monkeypatch.setattr(launcher.remote, "verify_modal_identity", identity)
+
+    status = launcher._launch(plan, context=context, project_root=tmp_path)
+
+    marker = json.loads((plan.output_dir / diagnostic.ATTEMPT_MARKER_NAME).read_text())
+    assert status == 1
+    assert marker["status"] == "modal_error"
