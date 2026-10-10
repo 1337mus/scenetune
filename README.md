@@ -94,7 +94,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-Open Food Facts is a candidate photo source. Register API use with the [OFF form](https://docs.google.com/forms/d/e/1FAIpQLSdIE3D8qvjC_zRJw1W8OmuHhsWJ_NSckiiniAHlfaVwUZCziQ/viewform) before API collection, or use Raj-owned photos.
+Six Open Food Facts image candidates are downloaded privately. Three look like camera photos; three have uncertain packshot origins. The [source check](docs/real-photo-source-check-2026-10-10.md) records these limits. There are no real-photo model scores yet.
 See the [real-photo evaluation plan](docs/real-photo-evaluation.md).
 The launcher shutdown fix landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). Any future launch still needs fresh pins, CI, usage checks, and root review. No launch is approved.
 

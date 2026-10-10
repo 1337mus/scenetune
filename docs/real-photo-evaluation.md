@@ -2,11 +2,11 @@
 
 ## Candidate photo source
 
-Open Food Facts (OFF) is the candidate photo source. No photos have been collected. Before collecting through its API, register API use with the [OFF form](https://docs.google.com/forms/d/e/1FAIpQLSdIE3D8qvjC_zRJw1W8OmuHhsWJ_NSckiiniAHlfaVwUZCziQ/viewform). Raj-owned photos are another option. See the [OFF terms](https://world.openfoodfacts.org/terms-of-use) and [API documentation](https://openfoodfacts.github.io/openfoodfacts-server/api/).
+Raj reports that he completed the [OFF API-use form](https://docs.google.com/forms/d/e/1FAIpQLSdIE3D8qvjC_zRJw1W8OmuHhsWJ_NSckiiniAHlfaVwUZCziQ/viewform). The first small collection is complete. Open Food Facts (OFF) remains a candidate source for private evaluation; photo ownership and camera origin are not independently proved. See the [OFF terms](https://world.openfoodfacts.org/terms-of-use) and [API documentation](https://openfoodfacts.github.io/openfoodfacts-server/api/).
 
 OFF product images use CC BY-SA 3.0. This covers the photos only. Product text, logos, people, and other third-party content may have separate rights. Record each photo's source, creator, license, and required attribution. A SHA-256 is a file fingerprint. It identifies an exact file, but not look-alike photos. Keep photos and crops private; do not put them in Git.
 
-The sample goal is 6–9 input photos across at least three product families. This is a starting point, not a fixed evaluation size. Group photos by product identity, package family, and near-duplicate/photo session before assigning train, development, and test pools. Until photo selection is complete, reserve test identities in metadata only. Keep test photos, masks, labels, and thumbnails closed.
+The sample goal is 6–9 suitable input photos across at least three product families. We collected six candidates; three look like camera photos and three have uncertain packshot origins. See the [source check](real-photo-source-check-2026-10-10.md). This is a starting point, not a fixed evaluation size. Group photos by product identity, package family, and near-duplicate/photo session before assigning train, development, and test pools. Until photo selection is complete, reserve test identities in metadata only. Keep test photos, masks, labels, and thumbnails closed.
 
 | Pool | Use | Boundary |
 |---|---|---|
