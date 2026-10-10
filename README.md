@@ -97,7 +97,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 - The six OFF candidates and all prepared assets stay private and out of Git. The frozen development set is Barilla, Kinder Bueno, and Quaker Cruesli; keep all three out of training and the final test set.
 - Raj confirmed the source words. Text boxes and product masks remain pending. Geometry review gates opening outputs and scoring, not inference on frozen inputs.
 - Proposed comparison: seven generations (3 base, 3 saved step-144 adapter, 1 fresh strict-load repeat), zero training, at 512×512, seed 7321, 16 steps, guidance 4.
-- No real-photo GPU outputs or scores exist. No launch is approved. See the [source check](docs/real-photo-source-check-2026-10-10.md) and [evaluation plan](docs/real-photo-evaluation.md).
+- The first remote real-photo attempt failed during runtime import before model loading. It produced no images or scores; a read-only check confirmed the app stopped with zero tasks. See the [attempt record](docs/real-photo-comparison-attempt-2026-10-10.md), [source check](docs/real-photo-source-check-2026-10-10.md), and [evaluation plan](docs/real-photo-evaluation.md). No retry or replacement launch has been cleared.
 
 The launcher shutdown fix landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). Any future launch still needs fresh pins, CI, usage checks, and root review.
 

@@ -53,4 +53,4 @@ flowchart LR
 
 ## Before compute
 
-No real-photo GPU run has happened, so this comparison has no generated outputs or scores. No launch is approved. The initial $15 pilot allowance still applies. Any future run needs fixed model and code versions, passing checks on that code, current usage checks, and a reviewed plan with time and cost limits. This document does not approve a GPU launch.
+The first remote attempt, `real-photo-off-r1-2026-10-10-r1`, failed during runtime import before model loading. It produced no generated images or scores, and did not run inference or training. See the [attempt record](real-photo-comparison-attempt-2026-10-10.md). The seven-generation comparison remains unexecuted; no retry or replacement launch has been cleared. The initial $15 pilot allowance still applies. Any future run needs fixed model and code versions, passing checks on that code, current usage checks, and a reviewed plan with time and cost limits. This document does not approve another GPU launch.

@@ -59,8 +59,15 @@ def _observed_diffsynth_commit() -> str:
 
 
 def _runtime_versions() -> dict[str, str]:
-    packages = {"modal": "modal", **{name: name for name in remote.RUNTIME_PINS}}
-    return {key: importlib.metadata.version(package) for key, package in packages.items()}
+    import modal
+
+    modal_version = getattr(modal, "__version__", None)
+    if not isinstance(modal_version, str) or not modal_version.strip():
+        raise RuntimeError("Modal SDK module does not expose a valid version")
+    return {
+        "modal": modal_version,
+        **{name: importlib.metadata.version(name) for name in remote.RUNTIME_PINS},
+    }
 
 
 def _validate_runtime_versions(versions: dict[str, str]) -> None:

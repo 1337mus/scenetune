@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from product_scene_editor import real_photo_runner as runner
 
 
@@ -789,6 +791,83 @@ def test_private_asset_reader_keeps_traversal_and_symlink_guards(tmp_path) -> No
         _read_private_file(root, "dev/source/alias.jpg", from_intake_parent=True)
 
 
+def test_runtime_versions_uses_modal_module_version_without_distribution_metadata(
+    monkeypatch,
+) -> None:
+    import importlib.metadata
+    import sys
+    from types import SimpleNamespace
+
+    from product_scene_editor import real_photo_inference as inference
+    from product_scene_editor import remote
+
+    monkeypatch.setitem(sys.modules, "modal", SimpleNamespace(__version__="1.6.1"))
+
+    def version(package: str) -> str:
+        if package == "modal":
+            raise importlib.metadata.PackageNotFoundError(package)
+        return remote.RUNTIME_PINS[package]
+
+    monkeypatch.setattr("importlib.metadata.version", version)
+
+    assert inference._runtime_versions() == {"modal": "1.6.1", **remote.RUNTIME_PINS}
+
+
+def test_runtime_versions_rejects_modal_module_version_mismatch(monkeypatch) -> None:
+    import importlib.metadata
+    import sys
+    from types import SimpleNamespace
+
+    import pytest
+
+    from product_scene_editor import real_photo_inference as inference
+    from product_scene_editor import remote
+
+    monkeypatch.setitem(sys.modules, "modal", SimpleNamespace(__version__="1.6.0"))
+
+    def version(package: str) -> str:
+        if package == "modal":
+            raise importlib.metadata.PackageNotFoundError(package)
+        return remote.RUNTIME_PINS[package]
+
+    monkeypatch.setattr("importlib.metadata.version", version)
+
+    with pytest.raises(RuntimeError, match="frozen runtime pins"):
+        inference._validate_runtime_versions(inference._runtime_versions())
+
+
+@pytest.mark.parametrize(
+    ("has_version", "version_value"),
+    [(False, None), (True, None), (True, ""), (True, 42)],
+)
+def test_runtime_versions_rejects_missing_or_invalid_modal_module_version(
+    monkeypatch, has_version: bool, version_value: object
+) -> None:
+    import importlib.metadata
+    import sys
+    from types import SimpleNamespace
+
+    import pytest
+
+    from product_scene_editor import real_photo_inference as inference
+    from product_scene_editor import remote
+
+    modal_module = SimpleNamespace()
+    if has_version:
+        modal_module.__version__ = version_value
+    monkeypatch.setitem(sys.modules, "modal", modal_module)
+
+    def version(package: str) -> str:
+        if package == "modal":
+            raise importlib.metadata.PackageNotFoundError(package)
+        return remote.RUNTIME_PINS[package]
+
+    monkeypatch.setattr("importlib.metadata.version", version)
+
+    with pytest.raises(RuntimeError, match="Modal.*version"):
+        inference._runtime_versions()
+
+
 def test_worker_receipt_binds_all_seven_generations_and_two_strict_loads(monkeypatch) -> None:
     import hashlib
     import sys
@@ -872,10 +951,17 @@ def test_worker_receipt_binds_all_seven_generations_and_two_strict_loads(monkeyp
     monkeypatch.setattr(
         inference, "_observed_diffsynth_commit", lambda: remote.DIFFSYNTH_COMMIT, raising=False
     )
-    versions = {**remote.RUNTIME_PINS, "modal": "1.6.1"}
-    monkeypatch.setattr(
-        "importlib.metadata.version", lambda package: versions.get(package, "unknown")
-    )
+    monkeypatch.setitem(sys.modules, "modal", SimpleNamespace(__version__="1.6.1"))
+    versions = remote.RUNTIME_PINS
+
+    def version(package):
+        if package == "modal":
+            import importlib.metadata
+
+            raise importlib.metadata.PackageNotFoundError(package)
+        return versions.get(package, "unknown")
+
+    monkeypatch.setattr("importlib.metadata.version", version)
     monkeypatch.setattr(
         remote, "_download_model_snapshots", lambda _download: {"fixture": Path(".")}
     )
@@ -939,5 +1025,5 @@ def test_worker_receipt_binds_all_seven_generations_and_two_strict_loads(monkeyp
     assert receipt["payload_sha256"] == hashlib.sha256(payload).hexdigest()
     assert receipt["quality_review_status"] == manifest["quality_review_status"]
     assert receipt["diffsynth_commit"] == remote.DIFFSYNTH_COMMIT
-    assert receipt["runtime_versions"] == versions
+    assert receipt["runtime_versions"] == {"modal": "1.6.1", **versions}
     assert receipt["strict_load_validations"] == [strict_evidence, strict_evidence]
