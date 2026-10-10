@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -30,6 +31,10 @@ PROFILE = "reflex-personal"
 WORKSPACE = "rajath-61258"
 ENVIRONMENT = "main"
 TRAINING_STEPS = 8
+_MATCHED_TRAINING_STEPS = 144
+_MATCHED_DATASET_MANIFEST_SHA256 = (
+    "206b07f99b2fd1c001b94898f3cacfa7010bacb7e08aa731b972135000e9a8f9"
+)
 MAX_RESULT_BYTES = 128 * 1024 * 1024
 DIFFSYNTH_COMMIT = "ee631d4907d8d6fc3d39063a2a65c00a954c9bf5"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu130"
@@ -94,6 +99,43 @@ LORA_TARGET_MODULES = ",".join(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _TrainingProfile:
+    name: str
+    train_pair_count: int
+    dev_pair_count: int
+    epochs: int
+    updates: int
+    dataset_manifest_sha256: str
+
+
+_PILOT_PROFILE = _TrainingProfile(
+    name="pilot",
+    train_pair_count=TRAINING_PAIR_COUNT,
+    dev_pair_count=1,
+    epochs=1,
+    updates=TRAINING_STEPS,
+    dataset_manifest_sha256=APPROVED_DATASET_MANIFEST_SHA256,
+)
+_MATCHED_PROFILE = _TrainingProfile(
+    name="matched-study",
+    train_pair_count=18,
+    dev_pair_count=9,
+    epochs=8,
+    updates=_MATCHED_TRAINING_STEPS,
+    dataset_manifest_sha256=_MATCHED_DATASET_MANIFEST_SHA256,
+)
+
+
+def _require_training_profile(profile: object) -> _TrainingProfile:
+    """Accept only the two closed internal profiles, by object identity."""
+    if profile is _PILOT_PROFILE:
+        return _PILOT_PROFILE
+    if profile is _MATCHED_PROFILE:
+        return _MATCHED_PROFILE
+    raise ValueError("training profile must be one of the two canonical private profiles")
+
+
 class _WorkerFailure(Exception):
     def __init__(self, stage: str, cause: BaseException) -> None:
         super().__init__(str(cause))
@@ -140,6 +182,69 @@ def validate_training_contract(
     if values != expected:
         raise ValueError("pilot schedule must make and save exactly eight single-sample updates")
     return TRAINING_STEPS
+
+
+def _validate_training_profile_contract(
+    profile: object,
+    *,
+    train_pair_count: int,
+    batch_size: int,
+    dataset_repeat: int,
+    num_epochs: int,
+    gradient_accumulation_steps: int,
+    process_count: int,
+    save_steps: int,
+) -> int:
+    selected = _require_training_profile(profile)
+    values = (
+        train_pair_count,
+        batch_size,
+        dataset_repeat,
+        num_epochs,
+        gradient_accumulation_steps,
+        process_count,
+        save_steps,
+    )
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise ValueError("training schedule settings must be integers")
+    expected = (
+        selected.train_pair_count,
+        1,
+        1,
+        selected.epochs,
+        1,
+        1,
+        selected.updates,
+    )
+    if values != expected:
+        raise ValueError(
+            f"{selected.name} schedule must make and save exactly "
+            f"{selected.updates} single-sample updates"
+        )
+    return selected.updates
+
+
+def _validate_matched_training_contract(
+    *,
+    train_pair_count: int,
+    batch_size: int,
+    dataset_repeat: int,
+    num_epochs: int,
+    gradient_accumulation_steps: int,
+    process_count: int,
+    save_steps: int,
+) -> int:
+    """Match the frozen 18-pair, eight-epoch, 144-update study schedule."""
+    return _validate_training_profile_contract(
+        _MATCHED_PROFILE,
+        train_pair_count=train_pair_count,
+        batch_size=batch_size,
+        dataset_repeat=dataset_repeat,
+        num_epochs=num_epochs,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        process_count=process_count,
+        save_steps=save_steps,
+    )
 
 
 def _parse_workspace(token_output: str) -> str | None:
@@ -229,9 +334,11 @@ def _failure_bundle(
     error: BaseException,
     progress: dict[str, Any],
     work_root: Path | None,
+    profile: object = _PILOT_PROFILE,
 ) -> bytes:
+    selected = _require_training_profile(profile)
     saved_artifacts: dict[str, bytes] = {}
-    if work_root is not None:
+    if work_root is not None and selected is _PILOT_PROFILE:
         artifact_paths = (
             ("adapter/step-8.safetensors", work_root / "training-output" / "step-8.safetensors"),
             ("images/base.png", work_root / "base.png"),
@@ -246,13 +353,33 @@ def _failure_bundle(
                 except ValueError:
                     continue
                 saved_artifacts[name] = content
+    elif work_root is not None:
+        matched_paths: list[tuple[str, Path]] = [
+            (
+                "adapter/step-144.safetensors",
+                work_root / "training-output" / "step-144.safetensors",
+            )
+        ]
+        for relative_name in progress.get("saved_artifacts", []):
+            if not isinstance(relative_name, str) or not relative_name.startswith("images/"):
+                continue
+            path = work_root / relative_name
+            matched_paths.append((relative_name, path))
+        for name, path in matched_paths:
+            if path.is_file() and not path.is_symlink() and path.stat().st_size:
+                content = path.read_bytes()
+                try:
+                    _bundle({**saved_artifacts, name: content})
+                except ValueError:
+                    continue
+                saved_artifacts[name] = content
     failure_progress: dict[str, Any] = {
-        "optimizer_updates": min(int(progress.get("optimizer_updates", 0)), TRAINING_STEPS),
+        "optimizer_updates": min(int(progress.get("optimizer_updates", 0)), selected.updates),
         "optimizer_steps_attempted": min(
-            int(progress.get("optimizer_steps_attempted", 0)), TRAINING_STEPS
+            int(progress.get("optimizer_steps_attempted", 0)), selected.updates
         ),
-        "losses": list(progress.get("losses", []))[:TRAINING_STEPS],
-        "gradient_steps": list(progress.get("gradient_steps", []))[:TRAINING_STEPS],
+        "losses": list(progress.get("losses", []))[: selected.updates],
+        "gradient_steps": list(progress.get("gradient_steps", []))[: selected.updates],
         "saved_artifacts": list(saved_artifacts),
         "worker_elapsed_seconds": max(0.0, float(progress.get("elapsed_seconds", 0.0))),
     }
@@ -265,7 +392,9 @@ def _failure_bundle(
     ):
         if key in progress and progress[key] is not None:
             value = progress[key]
-            failure_progress[key] = list(value)[:TRAINING_STEPS] if key == "step_seconds" else value
+            failure_progress[key] = (
+                list(value)[: selected.updates] if key == "step_seconds" else value
+            )
 
     receipt = {
         "schema_version": 1,
@@ -279,6 +408,8 @@ def _failure_bundle(
         "progress": failure_progress,
         "recorded_at_utc": datetime.now(UTC).isoformat(),
     }
+    if selected is _MATCHED_PROFILE:
+        receipt["study_type"] = "matched144"
     artifacts = {
         **saved_artifacts,
         "receipt.json": (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode(),
@@ -380,6 +511,30 @@ def _load_payload(
     return train_rows, dev_pair, source_manifest_sha256
 
 
+def _load_matched_payload(
+    payload_bytes: bytes, run_id: str, work_dir: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    from .matched_study import validate_matched_study_payload_bytes
+
+    payload = validate_matched_study_payload_bytes(payload_bytes, run_id)
+    if payload.source_dataset_manifest_sha256 != _MATCHED_PROFILE.dataset_manifest_sha256:
+        raise ValueError("matched-study data manifest does not match the reviewed dataset")
+    training_root = work_dir / "training-data"
+    for name, content in payload.files.items():
+        if name in {"metadata.json", "matched_manifest.json"}:
+            continue
+        relative = PurePosixPath(name)
+        if relative.parts[0] not in {"train", "dev"}:
+            raise ValueError("matched-study payload contains an unexpected asset path")
+        base = training_root if relative.parts[0] == "train" else work_dir
+        target = base.joinpath(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    training_root.mkdir(parents=True, exist_ok=True)
+    training_root.joinpath("metadata.json").write_bytes(payload.files["metadata.json"])
+    return list(payload.train_rows), list(payload.dev_rows), payload.source_dataset_manifest_sha256
+
+
 def _component_paths(snapshot_dirs: dict[str, Path]) -> tuple[list[list[str]], str]:
     text_files = sorted(
         str(path) for path in (snapshot_dirs["text_encoder"] / "text_encoder").glob("*.safetensors")
@@ -447,9 +602,16 @@ def _validate_finite_adapter_weights(finite_flags: list[bool]) -> None:
         raise FloatingPointError("final adapter weights must be finite")
 
 
+def _guard_profile_optimizer_update(profile: object, completed_updates: int) -> None:
+    selected = _require_training_profile(profile)
+    if completed_updates >= selected.updates:
+        if selected is _PILOT_PROFILE:
+            raise RuntimeError("pilot eight-update limit reached before optimizer step")
+        raise RuntimeError("matched-study 144-update limit reached before optimizer step")
+
+
 def _guard_optimizer_update(completed_updates: int) -> None:
-    if completed_updates >= TRAINING_STEPS:
-        raise RuntimeError("pilot eight-update limit reached before optimizer step")
+    _guard_profile_optimizer_update(_PILOT_PROFILE, completed_updates)
 
 
 def _load_pipe(snapshot_dirs: dict[str, Path], device: str) -> Any:
@@ -467,6 +629,110 @@ def _load_pipe(snapshot_dirs: dict[str, Path], device: str) -> Any:
         model_configs=configs,
         tokenizer_config=ModelConfig(path=tokenizer_path),
     )
+
+
+def _matched_reload_pixel_metrics(trained: Any, reloaded: Any) -> dict[str, float | int]:
+    from PIL import ImageChops, ImageStat
+
+    if (
+        getattr(trained, "mode", None) != "RGB"
+        or getattr(reloaded, "mode", None) != "RGB"
+        or trained.size != (512, 512)
+        or reloaded.size != trained.size
+    ):
+        raise ValueError("matched reload images must both be 512x512 RGB")
+    difference = ImageChops.difference(trained, reloaded)
+    channels = difference.split()
+    max_channel = ImageChops.lighter(ImageChops.lighter(channels[0], channels[1]), channels[2])
+    mean_absolute_error = sum(ImageStat.Stat(difference).mean) / 3
+    max_absolute_error = max(difference.tobytes())
+    over_8 = max_channel.point(lambda value: 255 if value > 8 else 0)
+    fraction_over_8 = over_8.histogram()[255] / (512 * 512)
+    return {
+        "mean_absolute_pixel_error": mean_absolute_error,
+        "fraction_of_pixels_over_8": fraction_over_8,
+        "max_absolute_pixel_error": max_absolute_error,
+    }
+
+
+def _matched_image_name(pair_id: str, mode: str) -> str:
+    if (
+        not isinstance(pair_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", pair_id)
+        or ".." in pair_id
+        or mode not in {"base", "trained", "reloaded"}
+    ):
+        raise ValueError("matched development pair ID or image mode is invalid")
+    return f"images/{pair_id}/{mode}.png"
+
+
+def _prepare_matched_development_assets(
+    rows: list[dict[str, Any]], work_root: Path, image_module: Any
+) -> dict[str, dict[str, Any]]:
+    assets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        pair_id = row.get("pair_id")
+        if not isinstance(pair_id, str):
+            raise ValueError("matched development pair IDs must be strings")
+        _matched_image_name(pair_id, "base")
+        if pair_id in assets:
+            raise ValueError("matched development pair IDs must be unique")
+        with image_module.open(work_root / row["edit_image"]) as opened:
+            source = opened.convert("RGB")
+        with image_module.open(work_root / row["image"]) as opened:
+            target = opened.convert("RGB")
+        with image_module.open(work_root / row["mask"]) as opened:
+            mask = opened.convert("L")
+        _validate_matched_foreground_identity(source, target, mask)
+        assets[pair_id] = {
+            "row": row,
+            "prompt": row["prompt"],
+            "source": source,
+            "target": target,
+            "mask": mask,
+        }
+    if len(assets) != _MATCHED_PROFILE.dev_pair_count:
+        raise ValueError("matched study must include exactly nine development pairs")
+    return assets
+
+
+def _generate_matched_pair_images(
+    pipe: Any,
+    development_assets: dict[str, dict[str, Any]],
+    work_root: Path,
+    mode: str,
+    seed: int,
+    progress: dict[str, Any],
+) -> dict[str, Any]:
+    images: dict[str, Any] = {}
+    saved = list(progress.get("saved_artifacts", []))
+    for pair_id, assets in development_assets.items():
+        image = _generate(pipe, assets["prompt"], assets["source"], seed=seed).convert("RGB")
+        relative_name = _matched_image_name(pair_id, mode)
+        image_path = work_root / relative_name
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(image_path, format="PNG", optimize=True)
+        images[pair_id] = image
+        if relative_name not in saved:
+            saved.append(relative_name)
+        progress["saved_artifacts"] = saved
+    return images
+
+
+def _score_matched_generations(
+    development_assets: dict[str, dict[str, Any]], generated_by_mode: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    from .matched_study import score_pair
+
+    metrics: dict[str, dict[str, dict[str, float | int]]] = {}
+    for pair_id, assets in development_assets.items():
+        metrics[pair_id] = {
+            mode: score_pair(
+                assets["source"], assets["target"], assets["mask"], generated_by_mode[mode][pair_id]
+            )
+            for mode in ("base", "trained", "reloaded")
+        }
+    return metrics
 
 
 def _generate(pipe: Any, prompt: str, reference: Any, seed: int) -> Any:
@@ -514,8 +780,82 @@ def _reload_and_generate(
         torch.cuda.empty_cache()
 
 
+def _validate_matched_foreground_identity(source: Any, target: Any, mask: Any) -> None:
+    from PIL import ImageChops
+
+    if (
+        getattr(source, "mode", None) != "RGB"
+        or getattr(target, "mode", None) != "RGB"
+        or getattr(mask, "mode", None) != "L"
+        or source.size != (512, 512)
+        or target.size != source.size
+        or mask.size != source.size
+    ):
+        raise ValueError("matched source, target, and mask must be aligned 512x512 images")
+    histogram = mask.histogram()
+    if any(histogram[1:255]) or not histogram[0] or not histogram[255]:
+        raise ValueError("matched mask must contain both binary foreground and background")
+    for channel in ImageChops.difference(source, target).split():
+        if ImageChops.multiply(channel, mask).getbbox() is not None:
+            raise ValueError("matched source and target foreground pixels must be identical")
+
+
+def _reload_and_generate_pairs(
+    snapshot_dirs: dict[str, Path],
+    adapter_path: Path,
+    development_assets: dict[str, dict[str, Any]],
+    seed: int,
+    torch: Any,
+    *,
+    work_root: Path | None = None,
+    progress: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Strictly reload once and retain it while each result is generated and saved."""
+    from .reload_diagnostic import _load_replay_model
+
+    if (work_root is None) != (progress is None):
+        raise ValueError("matched reload persistence requires both work_root and progress")
+    reload_model, reloaded_pipe, validation = _load_replay_model(snapshot_dirs, adapter_path, torch)
+    try:
+        images: dict[str, Any] = {}
+        for pair_id, assets in development_assets.items():
+            image = _generate(reloaded_pipe, assets["prompt"], assets["source"], seed=seed).convert(
+                "RGB"
+            )
+            images[pair_id] = image
+            if work_root is not None and progress is not None:
+                relative_name = _matched_image_name(pair_id, "reloaded")
+                image_path = work_root / relative_name
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                image.save(image_path, format="PNG", optimize=True)
+                saved = list(progress.get("saved_artifacts", []))
+                if relative_name not in saved:
+                    saved.append(relative_name)
+                progress["saved_artifacts"] = saved
+        receipt_fields = {
+            "adapter_validation": validation["adapter_validation"],
+            "load_method": RELOAD_LOAD_METHOD,
+        }
+        return images, receipt_fields
+    finally:
+        del reloaded_pipe, reload_model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
 def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
-    """Train and verify one adapter, returning a bounded self-contained result archive."""
+    """Train the fixed eight-update pilot and preserve its R4 result contract."""
+    return _run_remote_training(payload_bytes, run_id, _PILOT_PROFILE)
+
+
+def run_remote_matched_study(payload_bytes: bytes, run_id: str) -> bytes:
+    """Train the one fixed 144-update adapter and compare it across nine dev pairs."""
+    return _run_remote_training(payload_bytes, run_id, _MATCHED_PROFILE)
+
+
+def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> bytes:
+    """Run one of the two closed training profiles through the shared worker body."""
+    selected = _require_training_profile(profile)
     stage = "input_validation"
     started = time.monotonic()
     work_root: Path | None = None
@@ -533,20 +873,28 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
             or ".." in run_id
         ):
             raise ValueError("invalid run identifier")
-        work_root = Path(tempfile.mkdtemp(prefix=f"pilot-{run_id}-"))
-        train_rows, dev_row, source_manifest_sha256 = _load_payload(
-            payload_bytes, run_id, work_root
-        )
-        if source_manifest_sha256 != APPROVED_DATASET_MANIFEST_SHA256:
-            raise ValueError("pilot data manifest does not match the reviewed dataset")
-        validate_training_contract(
+        work_root = Path(tempfile.mkdtemp(prefix=f"{selected.name}-{run_id}-"))
+        if selected is _PILOT_PROFILE:
+            train_rows, dev_row, source_manifest_sha256 = _load_payload(
+                payload_bytes, run_id, work_root
+            )
+            dev_rows = [dev_row]
+        else:
+            train_rows, dev_rows, source_manifest_sha256 = _load_matched_payload(
+                payload_bytes, run_id, work_root
+            )
+            dev_row = dev_rows[0]
+        if source_manifest_sha256 != selected.dataset_manifest_sha256:
+            raise ValueError(f"{selected.name} data manifest does not match the reviewed dataset")
+        _validate_training_profile_contract(
+            selected,
             train_pair_count=len(train_rows),
             batch_size=1,
             dataset_repeat=1,
-            num_epochs=1,
+            num_epochs=selected.epochs,
             gradient_accumulation_steps=1,
             process_count=1,
-            save_steps=TRAINING_STEPS,
+            save_steps=selected.updates,
         )
 
         stage = "runtime_import"
@@ -576,24 +924,36 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         downloaded = _download_model_snapshots(snapshot_download)
 
         stage = "base_generation"
-        dev_source_path = work_root / dev_row["edit_image"]
-        dev_target_path = work_root / dev_row["image"]
-        with Image.open(dev_source_path) as opened:
-            reference = opened.convert("RGB")
-        with Image.open(dev_target_path) as opened:
-            dev_target = opened.convert("RGB")
-        with Image.open(dev_source_path) as opened:
-            source_check = opened.convert("RGB")
-        if (
-            reference.size != (512, 512)
-            or dev_target.size != reference.size
-            or source_check.size != reference.size
-        ):
-            raise ValueError("pilot development images must be 512x512")
-        base_pipe = _load_pipe(downloaded, "cuda")
-        base_image = _generate(base_pipe, dev_row["prompt"], reference, seed=7321).convert("RGB")
-        base_image.save(work_root / "base.png", format="PNG", optimize=True)
-        del base_pipe
+        development_assets: dict[str, dict[str, Any]] = {}
+        base_images: dict[str, Any] = {}
+        if selected is _PILOT_PROFILE:
+            dev_source_path = work_root / dev_row["edit_image"]
+            dev_target_path = work_root / dev_row["image"]
+            with Image.open(dev_source_path) as opened:
+                reference = opened.convert("RGB")
+            with Image.open(dev_target_path) as opened:
+                dev_target = opened.convert("RGB")
+            with Image.open(dev_source_path) as opened:
+                source_check = opened.convert("RGB")
+            if (
+                reference.size != (512, 512)
+                or dev_target.size != reference.size
+                or source_check.size != reference.size
+            ):
+                raise ValueError("pilot development images must be 512x512")
+            base_pipe = _load_pipe(downloaded, "cuda")
+            base_image = _generate(base_pipe, dev_row["prompt"], reference, seed=7321).convert(
+                "RGB"
+            )
+            base_image.save(work_root / "base.png", format="PNG", optimize=True)
+            del base_pipe
+        else:
+            development_assets = _prepare_matched_development_assets(dev_rows, work_root, Image)
+            base_pipe = _load_pipe(downloaded, "cuda")
+            base_images = _generate_matched_pair_images(
+                base_pipe, development_assets, work_root, "base", 7321, progress
+            )
+            del base_pipe
         torch.cuda.empty_cache()
 
         stage = "training_setup"
@@ -615,8 +975,10 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 width_division_factor=16,
             ),
         )
-        if len(training_dataset) != TRAINING_PAIR_COUNT:
-            raise RuntimeError("DiffSynth dataset loader did not produce exactly eight samples")
+        if len(training_dataset) != selected.train_pair_count:
+            if selected is _PILOT_PROFILE:
+                raise RuntimeError("DiffSynth dataset loader did not produce exactly eight samples")
+            raise RuntimeError("DiffSynth dataset loader did not produce exactly 18 samples")
         model = Flux2ImageTrainingModule(
             model_paths=json.dumps(
                 [
@@ -658,7 +1020,7 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
 
         class _PilotAdamW(torch.optim.AdamW):  # type: ignore[misc]
             def step(self, closure: Any = None) -> Any:
-                _guard_optimizer_update(len(grad_steps))
+                _guard_profile_optimizer_update(selected, len(grad_steps))
                 grads = [
                     parameter.grad.detach().float().reshape(-1)
                     for _, parameter in trainable
@@ -724,8 +1086,8 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 "learning_rate": 1e-4,
                 "weight_decay": 0.0,
                 "dataset_num_workers": 0,
-                "save_steps": TRAINING_STEPS,
-                "num_epochs": 1,
+                "save_steps": selected.updates,
+                "num_epochs": selected.epochs,
                 "enable_model_cpu_offload": False,
                 "enable_optimizer_cpu_offload": False,
                 "cpu_offload_split_threshold": None,
@@ -751,12 +1113,19 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         progress["step_seconds"] = logger.step_seconds
         progress["max_allocated_gpu_bytes"] = int(torch.cuda.max_memory_allocated())
         training_finished = True
-        if logger.steps != TRAINING_STEPS or len(grad_steps) != TRAINING_STEPS:
+        if logger.steps != selected.updates or len(grad_steps) != selected.updates:
             raise RuntimeError("DiffSynth completed an unexpected number of optimizer updates")
-        adapter_path = output_dir / "step-8.safetensors"
+        adapter_filename = f"step-{selected.updates}.safetensors"
+        adapter_path = output_dir / adapter_filename
         if not adapter_path.is_file() or adapter_path.stat().st_size == 0:
-            raise RuntimeError("DiffSynth did not save the step-8 LoRA adapter")
-        progress["saved_artifacts"] = ["adapter/step-8.safetensors", "images/base.png"]
+            raise RuntimeError(f"DiffSynth did not save the {adapter_filename} LoRA adapter")
+        if selected is _PILOT_PROFILE:
+            progress["saved_artifacts"] = ["adapter/step-8.safetensors", "images/base.png"]
+        else:
+            progress["saved_artifacts"] = [
+                f"adapter/{adapter_filename}",
+                *list(progress.get("saved_artifacts", [])),
+            ]
         trained_model = accelerator.unwrap_model(model)
         final: dict[str, Any] = {}
         final_finite_flags: list[bool] = []
@@ -771,7 +1140,9 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         changed = [name for name in initial if not torch.equal(initial[name], final[name])]
         progress["changed_adapter_tensors"] = len(changed)
         if not changed:
-            raise RuntimeError("LoRA parameters did not change during the eight updates")
+            if selected is _PILOT_PROFILE:
+                raise RuntimeError("LoRA parameters did not change during the eight updates")
+            raise RuntimeError("LoRA parameters did not change during the 144 updates")
         max_parameter_delta = max(
             float((final[name] - initial[name]).abs().max().item()) for name in changed
         )
@@ -779,15 +1150,20 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
 
         stage = "trained_generation"
         trained_pipe = trained_model.pipe
-        trained_image = _generate(trained_pipe, dev_row["prompt"], reference, seed=7321).convert(
-            "RGB"
-        )
-        trained_image.save(work_root / "trained.png", format="PNG", optimize=True)
-        progress["saved_artifacts"] = [
-            "adapter/step-8.safetensors",
-            "images/base.png",
-            "images/trained.png",
-        ]
+        if selected is _PILOT_PROFILE:
+            trained_image = _generate(
+                trained_pipe, dev_row["prompt"], reference, seed=7321
+            ).convert("RGB")
+            trained_image.save(work_root / "trained.png", format="PNG", optimize=True)
+            progress["saved_artifacts"] = [
+                "adapter/step-8.safetensors",
+                "images/base.png",
+                "images/trained.png",
+            ]
+        else:
+            trained_images = _generate_matched_pair_images(
+                trained_pipe, development_assets, work_root, "trained", 7321, progress
+            )
 
         delattr(sys.modules[__name__], optimizer_symbol)
         accelerator.free_memory()
@@ -806,26 +1182,56 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         torch.cuda.empty_cache()
 
         stage = "adapter_reload"
-        reloaded_image, reload_receipt_fields = _reload_and_generate(
-            downloaded, adapter_path, dev_row["prompt"], reference, 7321, torch
-        )
-        reloaded_image.save(work_root / "reloaded.png", format="PNG", optimize=True)
-        progress["saved_artifacts"] = [
-            "adapter/step-8.safetensors",
-            "images/base.png",
-            "images/trained.png",
-            "images/reloaded.png",
-        ]
-        torch.cuda.empty_cache()
-        trained_again = Image.open(work_root / "trained.png").convert("RGB")
-        difference = ImageChops.difference(trained_again, reloaded_image)
-        diff_values = list(difference.getdata())
-        mean_abs_error = sum(sum(pixel) for pixel in diff_values) / (len(diff_values) * 3)
-        max_abs_error = max(max(pixel) for pixel in diff_values)
-        pixels_over_8 = sum(max(pixel) > 8 for pixel in diff_values)
-        fraction_over_8 = pixels_over_8 / len(diff_values)
-        if mean_abs_error > 2.0 or fraction_over_8 > 0.01:
-            raise RuntimeError("reloaded adapter generation exceeded the explicit pixel tolerance")
+        matched_reload_per_pair: dict[str, dict[str, float | int]] = {}
+        matched_metrics: dict[str, dict[str, dict[str, float | int]]] = {}
+        if selected is _PILOT_PROFILE:
+            reloaded_image, reload_receipt_fields = _reload_and_generate(
+                downloaded, adapter_path, dev_row["prompt"], reference, 7321, torch
+            )
+            reloaded_image.save(work_root / "reloaded.png", format="PNG", optimize=True)
+            progress["saved_artifacts"] = [
+                "adapter/step-8.safetensors",
+                "images/base.png",
+                "images/trained.png",
+                "images/reloaded.png",
+            ]
+            torch.cuda.empty_cache()
+            trained_again = Image.open(work_root / "trained.png").convert("RGB")
+            difference = ImageChops.difference(trained_again, reloaded_image)
+            diff_values = list(difference.getdata())
+            mean_abs_error = sum(sum(pixel) for pixel in diff_values) / (len(diff_values) * 3)
+            max_abs_error = max(max(pixel) for pixel in diff_values)
+            pixels_over_8 = sum(max(pixel) > 8 for pixel in diff_values)
+            fraction_over_8 = pixels_over_8 / len(diff_values)
+            if mean_abs_error > 2.0 or fraction_over_8 > 0.01:
+                raise RuntimeError(
+                    "reloaded adapter generation exceeded the explicit pixel tolerance"
+                )
+        else:
+            reloaded_images, reload_receipt_fields = _reload_and_generate_pairs(
+                downloaded,
+                adapter_path,
+                development_assets,
+                7321,
+                torch,
+                work_root=work_root,
+                progress=progress,
+            )
+            for pair_id, reloaded_image in reloaded_images.items():
+                per_pair = _matched_reload_pixel_metrics(trained_images[pair_id], reloaded_image)
+                matched_reload_per_pair[pair_id] = per_pair
+                if (
+                    per_pair["mean_absolute_pixel_error"] > 2.0
+                    or per_pair["fraction_of_pixels_over_8"] > 0.01
+                ):
+                    raise RuntimeError(
+                        f"reloaded adapter generation exceeded the explicit pixel tolerance "
+                        f"for {pair_id}"
+                    )
+            matched_metrics = _score_matched_generations(
+                development_assets,
+                {"base": base_images, "trained": trained_images, "reloaded": reloaded_images},
+            )
         stage = "result_packaging"
         package_versions: dict[str, str] = {}
         for package in (
@@ -853,13 +1259,13 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
             "components": MODEL_COMPONENTS,
             "training": {
                 "training_pairs": len(train_rows),
-                "development_pairs": 1,
+                "development_pairs": len(dev_rows),
                 "source_dataset_manifest_sha256": source_manifest_sha256,
                 "optimizer_updates": logger.steps,
                 "gradient_accumulation_steps": 1,
                 "dataset_repeat": 1,
-                "epochs": 1,
-                "save_steps": TRAINING_STEPS,
+                "epochs": selected.epochs,
+                "save_steps": selected.updates,
                 "losses": logger.losses,
                 "gradient_steps": grad_steps,
                 "changed_adapter_tensors": len(changed),
@@ -867,15 +1273,31 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
                 "training_seconds": training_seconds,
                 "step_seconds": logger.step_seconds,
             },
-            "generation_reload_check": {
-                "seed": 7321,
-                "steps": 16,
-                "mean_absolute_pixel_error": mean_abs_error,
-                "max_absolute_pixel_error": max_abs_error,
-                "fraction_of_pixels_over_8": fraction_over_8,
-                "tolerance": {"mean_absolute_pixel_error_max": 2.0, "fraction_over_8_max": 0.01},
-                **reload_receipt_fields,
-            },
+            "generation_reload_check": (
+                {
+                    "seed": 7321,
+                    "steps": 16,
+                    "mean_absolute_pixel_error": mean_abs_error,
+                    "max_absolute_pixel_error": max_abs_error,
+                    "fraction_of_pixels_over_8": fraction_over_8,
+                    "tolerance": {
+                        "mean_absolute_pixel_error_max": 2.0,
+                        "fraction_over_8_max": 0.01,
+                    },
+                    **reload_receipt_fields,
+                }
+                if selected is _PILOT_PROFILE
+                else {
+                    "seed": 7321,
+                    "steps": 16,
+                    "tolerance": {
+                        "mean_absolute_pixel_error_max": 2.0,
+                        "fraction_over_8_max": 0.01,
+                    },
+                    **reload_receipt_fields,
+                    "per_pair": matched_reload_per_pair,
+                }
+            ),
             "resources": {
                 "gpu": torch.cuda.get_device_name(0),
                 "max_allocated_gpu_bytes": torch.cuda.max_memory_allocated(),
@@ -884,13 +1306,32 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
             "runtime_versions": package_versions,
             "recorded_at_utc": datetime.now(UTC).isoformat(),
         }
-        artifacts = {
-            "adapter/step-8.safetensors": adapter_path.read_bytes(),
-            "images/base.png": (work_root / "base.png").read_bytes(),
-            "images/trained.png": (work_root / "trained.png").read_bytes(),
-            "images/reloaded.png": (work_root / "reloaded.png").read_bytes(),
-            "receipt.json": (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode("utf-8"),
-        }
+        if selected is _PILOT_PROFILE:
+            artifacts = {
+                "adapter/step-8.safetensors": adapter_path.read_bytes(),
+                "images/base.png": (work_root / "base.png").read_bytes(),
+                "images/trained.png": (work_root / "trained.png").read_bytes(),
+                "images/reloaded.png": (work_root / "reloaded.png").read_bytes(),
+                "receipt.json": (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode(
+                    "utf-8"
+                ),
+            }
+        else:
+            receipt["study_type"] = "matched144"
+            receipt["metrics"] = {"per_pair": matched_metrics}
+            artifacts = {
+                f"adapter/{adapter_filename}": adapter_path.read_bytes(),
+                **{
+                    _matched_image_name(pair_id, mode): (
+                        work_root / _matched_image_name(pair_id, mode)
+                    ).read_bytes()
+                    for pair_id in development_assets
+                    for mode in ("base", "trained", "reloaded")
+                },
+                "receipt.json": (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode(
+                    "utf-8"
+                ),
+            }
         return _bundle(artifacts)
     except Exception as exc:
         progress["elapsed_seconds"] = time.monotonic() - started
@@ -908,7 +1349,12 @@ def run_remote_training(payload_bytes: bytes, run_id: str) -> bytes:
         else:
             error = exc
         return _failure_bundle(
-            run_id if isinstance(run_id, str) else "invalid", stage, error, progress, work_root
+            run_id if isinstance(run_id, str) else "invalid",
+            stage,
+            error,
+            progress,
+            work_root,
+            selected,
         )
     finally:
         if work_root is not None:
