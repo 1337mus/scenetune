@@ -442,8 +442,64 @@ def _stop_detached_app(app_id: str, *, context: dict[str, str]) -> None:
         )
     except Exception as exc:
         raise RuntimeError("could not stop the detached matched-study Modal app") from exc
-    if completed.returncode != 0:
+    if completed.returncode == 0:
+        return
+    try:
+        observation = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "modal",
+                "app",
+                "list",
+                "--json",
+                "--env",
+                context["environment"],
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=environment,
+        )
+    except Exception as exc:
+        raise RuntimeError("could not stop the detached matched-study Modal app") from exc
+    if observation.returncode != 0 or not _app_list_confirms_stopped(observation.stdout, app_id):
         raise RuntimeError("Modal did not confirm that the matched-study app stopped")
+
+
+def _app_list_confirms_stopped(output: str, app_id: str) -> bool:
+    try:
+        apps = json.loads(output)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(apps, list):
+        return False
+    expected_fields = {"app_id", "description", "state", "tasks", "created_at", "stopped_at"}
+    matching_apps: list[dict[str, Any]] = []
+    for app in apps:
+        if not isinstance(app, dict) or set(app) != expected_fields:
+            return False
+        if (
+            not isinstance(app["app_id"], str)
+            or not app["app_id"]
+            or not isinstance(app["state"], str)
+            or not isinstance(app["tasks"], str)
+            or not app["tasks"].isdigit()
+        ):
+            return False
+        if any(
+            app[field] is not None and not isinstance(app[field], str)
+            for field in ("description", "created_at", "stopped_at")
+        ):
+            return False
+        if app["app_id"] == app_id:
+            matching_apps.append(app)
+    return (
+        len(matching_apps) == 1
+        and matching_apps[0]["state"] == "stopped"
+        and matching_apps[0]["tasks"] == "0"
+    )
 
 
 def _record_shutdown_failure(

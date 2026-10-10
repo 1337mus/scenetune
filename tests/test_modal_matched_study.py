@@ -414,3 +414,131 @@ def test_recovery_observes_only_the_recorded_modal_call_id_and_stops_completed_a
     assert stop_command[2:5] == ["modal", "app", "stop"]
     assert stop_environment["MODAL_PROFILE"] == remote.PROFILE
     assert failure["worker_failure_confirmed"] is False
+
+
+def test_stop_detached_app_confirms_already_stopped_from_exact_app_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {"profile": remote.PROFILE, "environment": "main"}
+    other_app = {
+        "app_id": "ap-other",
+        "description": "other app",
+        "state": "deployed",
+        "tasks": "2",
+        "created_at": "2026-10-10 00:00:00",
+        "stopped_at": None,
+    }
+    stopped_app = {
+        "app_id": "ap-stopped",
+        "description": "matched study",
+        "state": "stopped",
+        "tasks": "0",
+        "created_at": "2026-10-10 00:00:00",
+        "stopped_at": "2026-10-10 00:01:00",
+    }
+    responses = [
+        subprocess.CompletedProcess([], 1, "", "unclassified stop error"),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps([other_app, stopped_app]),
+            "",
+        ),
+    ]
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(modal_matched_study.subprocess, "run", run)
+
+    modal_matched_study._stop_detached_app("ap-stopped", context=context)
+
+    assert len(calls) == 2
+    stop_command, stop_kwargs = calls[0]
+    list_command, list_kwargs = calls[1]
+    assert stop_command[2:5] == ["modal", "app", "stop"]
+    assert list_command == [
+        sys.executable,
+        "-m",
+        "modal",
+        "app",
+        "list",
+        "--json",
+        "--env",
+        "main",
+    ]
+    assert stop_kwargs["env"]["MODAL_PROFILE"] == remote.PROFILE  # type: ignore[index]
+    assert list_kwargs["env"]["MODAL_PROFILE"] == remote.PROFILE  # type: ignore[index]
+    assert stop_kwargs["timeout"] == 60
+    assert list_kwargs["timeout"] == 30
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "duplicate",
+        "running",
+        "nonzero_tasks",
+        "malformed_row",
+        "malformed_json",
+        "malformed_root",
+        "observation_exit",
+        "observation_timeout",
+    ],
+)
+def test_stop_detached_app_rejects_unconfirmed_list_observations(
+    case: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = {"profile": remote.PROFILE, "environment": "main"}
+    stopped_app: dict[str, str | None] = {
+        "app_id": "ap-stopped",
+        "description": "matched study",
+        "state": "stopped",
+        "tasks": "0",
+        "created_at": "2026-10-10 00:00:00",
+        "stopped_at": "2026-10-10 00:01:00",
+    }
+    rows: list[dict[str, str | None]] = [stopped_app]
+    list_output: str | None = None
+    list_returncode = 0
+    if case == "missing":
+        rows = []
+    elif case == "duplicate":
+        rows = [stopped_app, stopped_app.copy()]
+    elif case == "running":
+        stopped_app["state"] = "deployed"
+    elif case == "nonzero_tasks":
+        stopped_app["tasks"] = "1"
+    elif case == "malformed_row":
+        del stopped_app["stopped_at"]
+    elif case == "malformed_json":
+        list_output = "{"
+    elif case == "malformed_root":
+        list_output = json.dumps({"apps": []})
+    elif case == "observation_exit":
+        list_returncode = 1
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 1, "", "stop did not confirm")
+        if case == "observation_timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        output = list_output if list_output is not None else json.dumps(rows)
+        return subprocess.CompletedProcess(command, list_returncode, output, "")
+
+    monkeypatch.setattr(modal_matched_study.subprocess, "run", run)
+
+    error_message = "could not stop" if case == "observation_timeout" else "Modal did not confirm"
+    with pytest.raises(RuntimeError, match=error_message):
+        modal_matched_study._stop_detached_app("ap-stopped", context=context)
+
+    assert len(calls) == 2
+    list_command, list_kwargs = calls[1]
+    assert list_command[2:5] == ["modal", "app", "list"]
+    assert list_kwargs["timeout"] == 30
+    assert list_kwargs["env"]["MODAL_PROFILE"] == remote.PROFILE  # type: ignore[index]
