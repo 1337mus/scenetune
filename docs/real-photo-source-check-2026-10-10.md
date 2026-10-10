@@ -31,10 +31,10 @@ These are assistant visual observations. They do not prove ownership, camera ori
 
 ## What remains
 
-- Confirm the visible words against the source photos. The transcriptions are drafts.
+- Raj confirmed the seven listed text labels; boxes around text and product outlines still need review.
 - Check product masks before reporting product-pixel changes. No masks are approved yet.
-- Freeze a matched comparison of the original model and saved adapter.
-- Define separate product groups for a future test pool. No test pool exists yet.
+- Compare three development candidates with the saved step-144 adapter and zero training.
+- Exclude all three comparison products from future training and final test; no test pool exists yet.
 
 The original 3/3 train-candidate/development grouping is provisional. No real-photo training has happened. Any input used for the next comparison must become a development case and stay out of future training or final tests.
 
