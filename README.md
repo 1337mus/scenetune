@@ -94,9 +94,9 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-Measure label readability and performance on licensed or owned real product photos.
-Do that before spending on a larger training run. Keep the reserved synthetic test set closed during tuning.
-Correct the launcher’s shutdown handling before more GPU work.
+Open Food Facts is a candidate photo source. Register API use with the [OFF form](https://docs.google.com/forms/d/e/1FAIpQLSdIE3D8qvjC_zRJw1W8OmuHhsWJ_NSckiiniAHlfaVwUZCziQ/viewform) before API collection, or use Raj-owned photos.
+See the [real-photo evaluation plan](docs/real-photo-evaluation.md).
+The launcher shutdown fix landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). Any future launch still needs fresh pins, CI, usage checks, and root review. No launch is approved.
 
 ## Development
 
