@@ -67,6 +67,19 @@ The controlled-studio R7 preview passed its strict checks, but did not explain t
 
 [Varied-studio R7 report and contact sheets](docs/varied-studio-preview-2026-10-11.md) · [Controlled-studio R2/R3 results](docs/controlled-studio-preview-2026-10-10.md).
 
+## Fresh 3D data checks
+
+A separate validator and training export are now implemented. The original dataset route stays intact.
+
+- **Keep pools separate.** Each product and whole background family belongs to one pool.
+- **Check the actual files.** Verify scene records, source pins, images and product masks.
+- **Protect reserved tests.** Check their metadata without opening their files.
+- **Export training data only.** Match each reference photo to the correct target, even when the input order changes.
+
+These checks do not approve visual quality or prove that every scene setting was captured. A trusted caller must provide a reviewed registry. No fresh data export or GPU run has taken place.
+
+[Validator contract and limits](docs/controlled3d-validation.md).
+
 ## What we built
 
 - A paired dataset with source images, target images and product masks.
@@ -131,9 +144,9 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-1. **Prepare a separate validator/export for fresh 3D data.** Use newly created, reviewed product and scene IDs. Keep every ID from this preview out of fresh data pools, training inputs, and reserved tests; preserve the existing dataset contract.
-2. **Improve scene quality before training.** Reduce grain and low contrast, correct the jar label board and pouch appearance, then review fresh renders.
-3. **Review fresh targets before a training study.** Use cleared sources, realistic placement and shadows, and separate product and background families. A matched training study waits until fresh 3D targets are reviewed for data acceptance and visual quality.
+1. **Review the fresh scene code.** Build a curved studio backdrop and a recessed display with separate original products. Keep preview products and earlier photo examples out of fresh data pools.
+2. **Run a small CPU preview.** Check labels, placement, shadows, grain and contrast on the actual images. Keep training and development background families separate.
+3. **Review targets before more training.** A fixed comparison of the original model and trained adapter waits until the new data passes both file checks and visual review.
 
 No further GPU run is cleared. Future compute needs a frozen plan, current prices and usage, pinned inputs, exact-source CI, and root review. Barilla, Kinder Bueno and Quaker Cruesli remain development-only. Their detailed output-label and geometry checks are still pending.
 
