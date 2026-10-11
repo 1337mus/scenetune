@@ -1,4 +1,4 @@
-# Product scene editor
+# SceneTune
 
 Personal project for Raj. Read `.context/kickoff.md` and current private vision context before compute.
 

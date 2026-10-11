@@ -1,11 +1,15 @@
-# Product Scene Editor
+# SceneTune
+
+Fine-tuning FLUX for product photography.
+
+This personal project is separate from [Reflex](https://github.com/1337mus/reflex).
 
 A reference-image editing experiment with **FLUX.2 Klein Base 4B** and a trained LoRA adapter.
 
 The goal is to change product-image backgrounds while keeping products intact.
 The first study used original synthetic packaging images. A bounded real-photo comparison has now generated three development cases; the original model was preferred in all three cases, while detailed quality checks remain pending.
 
-## Latest result
+## Synthetic training result
 
 **Training reduced pixel error on all nine development examples.**
 The original model and trained adapter used the same source images, prompts and random seed.
@@ -107,7 +111,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 - Completed R2: seven 512×512 generations (3 base, 3 saved step-144 adapter, 1 fresh strict-load repeat), zero training, seed 7321, 16 steps, guidance 4.
 - The first remote attempt (R1) failed during runtime import before model loading and produced no images or scores. The separately authorized R2 comparison completed; see the [R2 result](docs/real-photo-comparison-result-2026-10-10.md). The [R1 attempt record](docs/real-photo-comparison-attempt-2026-10-10.md) and [source check](docs/real-photo-source-check-2026-10-10.md) preserve its evidence; the [evaluation plan](docs/real-photo-evaluation.md) describes the frozen development set. No further launch is cleared.
 
-The shared-runner shutdown fix from the synthetic study landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). The real-photo shutdown fix landed in `b39fec4`; exact-source [CI run 38097654443 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38097654443). Any future launch still needs fresh pins, CI, usage checks, and root review.
+The shared-runner shutdown fix from the synthetic study landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/scenetune/actions/runs/38089275451). The real-photo shutdown fix landed in `b39fec4`; exact-source [CI run 38097654443 passed](https://github.com/1337mus/scenetune/actions/runs/38097654443). Any future launch still needs fresh pins, CI, usage checks, and root review.
 
 ## Development
 
