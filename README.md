@@ -106,12 +106,11 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-- The six OFF candidates and all prepared assets stay private and out of Git. The frozen development set is Barilla, Kinder Bueno, and Quaker Cruesli; keep all three out of training and the final test set. Improve realistic training targets before another training run.
-- Source review is complete for seven word boxes across the three cases and the first two package outlines. Cruesli is a cropped front: exclude whole-package shape and masked-pixel scoring. Output geometry, labels and background ratings remain pending.
-- Completed R2: seven 512×512 generations (3 base, 3 saved step-144 adapter, 1 fresh strict-load repeat), zero training, seed 7321, 16 steps, guidance 4.
-- The first remote attempt (R1) failed during runtime import before model loading and produced no images or scores. The separately authorized R2 comparison completed; see the [R2 result](docs/real-photo-comparison-result-2026-10-10.md). The [R1 attempt record](docs/real-photo-comparison-attempt-2026-10-10.md) and [source check](docs/real-photo-source-check-2026-10-10.md) preserve its evidence; the [evaluation plan](docs/real-photo-evaluation.md) describes the frozen development set. No further launch is cleared.
+1. **Improve the training targets.** Our first photographic-background composite kept all 43,704 product pixels unchanged, but looked oversized and pasted into the room. It stays out of training. [Preview findings and data plan](docs/photographic-target-plan.md).
+2. **Check the data before training.** Use cleared sources, realistic placement and shadows, and separate product and background families in each data pool. Keep the current reserved tests closed.
+3. **Run a small matched study once the data passes review.** Compare the original model and a fresh adapter on the same inputs. Check saved-adapter reload, product preservation and photo quality separately.
 
-The shared-runner shutdown fix from the synthetic study landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/scenetune/actions/runs/38089275451). The real-photo shutdown fix landed in `b39fec4`; exact-source [CI run 38097654443 passed](https://github.com/1337mus/scenetune/actions/runs/38097654443). Any future launch still needs fresh pins, CI, usage checks, and root review.
+No further GPU run is cleared. Future compute needs a frozen plan, current prices and usage, pinned inputs, exact-source CI, and root review. Barilla, Kinder Bueno and Quaker Cruesli remain development-only. Their detailed output-label and geometry checks are still pending.
 
 ## Development
 
