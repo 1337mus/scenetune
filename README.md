@@ -80,6 +80,13 @@ These checks do not approve visual quality or prove that every scene setting was
 
 [Validator contract and limits](docs/controlled3d-validation.md).
 
+The corrected fresh preview produced **8 CPU images from 2 original products**.
+Larger, darker labels passed visual review. The independent check verified all
+eight images, their product masks and the recorded scene states. No new model training ran; these
+fixtures stay outside new training pools.
+
+[Fresh preview, all eight images and next steps](docs/fresh-3d-preview-2026-10-11.md).
+
 ## What we built
 
 - A paired dataset with source images, target images and product masks.
@@ -144,9 +151,9 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-1. **Review the fresh scene code.** Build a curved studio backdrop and a recessed display with separate original products. Keep preview products and earlier photo examples out of fresh data pools.
-2. **Run a small CPU preview.** Check labels, placement, shadows, grain and contrast on the actual images. Keep training and development background families separate.
-3. **Review targets before more training.** A fixed comparison of the original model and trained adapter waits until the new data passes both file checks and visual review.
+1. **Build a larger, separate dataset.** Use new original products and whole background families. Keep all preview products and earlier photo examples out.
+2. **Save and verify the scenes.** Check labels, placement, masks and source pins. Keep training and development groups separate.
+3. **Run one fixed training comparison.** Compare the original model and a reloaded adapter only after the new data and launch plan pass review.
 
 No further GPU run is cleared. Future compute needs a frozen plan, current prices and usage, pinned inputs, exact-source CI, and root review. Barilla, Kinder Bueno and Quaker Cruesli remain development-only. Their detailed output-label and geometry checks are still pending.
 
