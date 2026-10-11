@@ -4,9 +4,9 @@ Fine-tuning FLUX for product photography.
 
 This personal project is separate from [Reflex](https://github.com/1337mus/reflex).
 
-A reference-image editing experiment with **FLUX.2 Klein Base 4B** and three separately trained LoRA adapters: one for flat synthetic backgrounds, one for controlled 3D scenes, and a preservation follow-up.
+A reference-image editing experiment with **FLUX.2 Klein Base 4B** and three separately trained LoRA adapters: one for flat synthetic backgrounds, one for controlled 3D scenes, and a preservation follow-up. The final approved real-photo pilot compared the original model and both 3D-scene adapters on three development photos; see the [result](docs/real-photo-preservation-result-2026-10-11.md).
 
-The goal is to change product-image backgrounds while keeping products intact. The three-case real-photo comparison tested only the first adapter. The newer 3D-scene adapter has not been tested on real photos.
+The goal is to change product-image backgrounds while keeping products intact. These small development studies do not establish exact product preservation or a broad model ranking.
 
 ## New 3D-scene study result (development only)
 
@@ -26,7 +26,7 @@ The evaluation covers nine development edits from three products and one unseen 
 
 Visual review found a failure: the adapter often changes the carton color to match the ground color. Some small label text looks distorted.
 
-The scores do not establish label text correctness or product-shape preservation. The new adapter has not been tested on real photos. Keep these results separate from the first study. They do not establish an overall winner.
+The scores do not establish label text correctness or product-shape preservation. The later matched real-photo comparison is a separate study. Keep these results separate from the first study; they do not establish an overall winner.
 
 The study used one A100 and the existing $15 pilot. Delayed gross workspace usage rose from $5.52 at launch to $6.14 at the 09:50:40Z check (+$0.62). Net usage was $0 after credits. This is delayed workspace usage, not the final invoice for this run. Assistant-token costs are separate.
 
@@ -37,6 +37,10 @@ The launcher reported a shutdown-confirmation error. A later read-only check at 
 ## 3D-scene preservation follow-up (development only)
 
 The fresh preservation LoRA lowered mean product-source pixel error by 10.39% versus the prior 3D adapter, but improved only 4/9 edits and missed the background-error limit by a small margin. The combined development goals were not met. Pixel metrics do not score text correctness or overall image quality. [Full preservation study report and contact sheets](docs/preservation-study-result-2026-10-11.md).
+
+## Real-photo preservation comparison (development only)
+
+The approved pilot compared the original model, the prior 3D-scene adapter, and the fresh preservation adapter on the same three development photos. All nine outputs changed product position and/or size; visual review found no clear overall quality improvement. Geometry changes make masked product-pixel scoring inapplicable for the two full-package photos. The third photo is a cropped package front. [Full report](docs/real-photo-preservation-result-2026-10-11.md).
 
 ## First synthetic study: flat-background targets
 
@@ -67,11 +71,11 @@ There is no claim of beating other image models.
 
 ![Three scenes for one development product: source, target, original model, trained adapter](docs/assets/matched-study-2026-10-09/pack-006.png)
 
-## Real-photo R2 comparison: first flat-background adapter
+## Earlier real-photo R2: first flat-background adapter
 
-R2 tested the original model against the first flat-background adapter in seven 512×512 generations on three development products (3 base, 3 adapter, 1 strict-load repeat), with zero training; the repeat matched pixel-for-pixel. [Run details](docs/real-photo-comparison-result-2026-10-10.md).
+This earlier R2 tested the original model against the first flat-background adapter in seven 512×512 generations on three development products (3 base, 3 adapter, 1 strict-load repeat), with zero training; the repeat matched pixel-for-pixel. [Run details](docs/real-photo-comparison-result-2026-10-10.md).
 
-Raj selected the original model in all three cases (Barilla A, Kinder Bueno B, Cruesli A). This records overall preference only; geometry, label correctness and background ratings remain pending. The newer 3D-scene adapter above has not been evaluated on real photos. Three cases do not establish a broad ranking.
+Raj selected the original model in all three cases (Barilla A, Kinder Bueno B, Cruesli A). This records overall preference only; geometry, label correctness and background ratings remain pending. This preference does not apply to the later two-adapter comparison. Three cases do not establish a broad ranking.
 
 ## Scene-data checks
 
@@ -182,7 +186,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-Review text, product shape and background appearance in the new 3D-scene results separately from pixel-error scores. A paired real-photo plan comparing the 3D-scene and preservation adapters is assembled, but source CI and clearance are still pending; no GPU call has launched. Barilla, Kinder Bueno and Quaker Cruesli remain development-only.
+The approved $15 pilot is closed. The real-photo comparison found product-position or size changes in every output and did not establish a clear quality improvement. Keep Barilla, Kinder Bueno and Quaker Cruesli out of training and testing. Any future improvement study needs broader realistic paired targets and untouched test photos; this result does not authorize another training run.
 
 ## Development
 
