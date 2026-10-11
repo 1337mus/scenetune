@@ -1,6 +1,10 @@
 # Photographic target preview
 
-Updated: 2026-10-10. Status: CPU proof-of-fit complete; training held.
+Updated: 2026-10-10. Photographic-background composite: visual gate failed; remains excluded.
+
+Controlled 3D follow-up: R2/R3 recipe preparation complete; training remains held.
+
+Follow-up: [Controlled studio preview results](controlled-studio-preview-2026-10-10.md) · [Separate 3D data proposal](controlled-studio-data-plan.md).
 
 ## Decision
 

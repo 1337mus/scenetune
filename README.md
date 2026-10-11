@@ -106,7 +106,9 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-1. **Improve the training targets.** Our first photographic-background composite kept all 43,704 product pixels unchanged, but looked oversized and pasted into the room. It stays out of training. [Preview findings and data plan](docs/photographic-target-plan.md).
+1. **Prepare reviewed training targets.** The photographic-background composite preserved 43,704 product pixels, but looked oversized and pasted into the room; it stays out of training. Controlled-studio R2/R3 provide one measurable 3D scene recipe. R3 remains visibly grainy, and training remains held.
+
+   [Preview results](docs/controlled-studio-preview-2026-10-10.md) · [Separate 3D data proposal](docs/controlled-studio-data-plan.md) · [Photographic-target findings](docs/photographic-target-plan.md).
 2. **Check the data before training.** Use cleared sources, realistic placement and shadows, and separate product and background families in each data pool. Keep the current reserved tests closed.
 3. **Run a small matched study once the data passes review.** Compare the original model and a fresh adapter on the same inputs. Check saved-adapter reload, product preservation and photo quality separately.
 
