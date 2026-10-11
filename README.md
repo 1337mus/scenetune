@@ -4,12 +4,39 @@ Fine-tuning FLUX for product photography.
 
 This personal project is separate from [Reflex](https://github.com/1337mus/reflex).
 
-A reference-image editing experiment with **FLUX.2 Klein Base 4B** and a trained LoRA adapter.
+A reference-image editing experiment with **FLUX.2 Klein Base 4B** and two separate trained LoRA adapters. The first targeted flat synthetic backgrounds; the newer adapter used controlled 3D scenes.
 
-The goal is to change product-image backgrounds while keeping products intact.
-The first study used original synthetic packaging images. A bounded real-photo comparison has now generated three development cases; the original model was preferred in all three cases, while detailed quality checks remain pending.
+The goal is to change product-image backgrounds while keeping products intact. The three-case real-photo comparison tested only the first adapter. The newer 3D-scene adapter has not been tested on real photos.
 
-## Synthetic training result
+## New 3D-scene study result (development only)
+
+The signed [source commit 150f8ca](https://github.com/1337mus/scenetune/commit/150f8ca54379bb07f7d39fa7ee180278bf29c824) passed exact [CI run 38128615093](https://github.com/1337mus/scenetune/actions/runs/38128615093). The worker completed all 144 updates.
+
+All 200 adapter tensors across 100 modules changed during training. The saved adapter reloaded, and all nine generated images then matched pixel-for-pixel. Training took 3.1 minutes; the worker took 9.8 minutes on one A100.
+
+| Measure | Original model | 3D-scene adapter | Change |
+|---|---:|---:|---|
+| Product error against target | 31.97 | 22.22 | 30.5% lower; better in 5/9 edits |
+| Product change from source | 32.64 | 23.36 | 28.4% less change; lower in 5/9 edits |
+| Background error against target | 87.69 | 14.74 | 83.2% lower; better in 9/9 edits |
+
+Each error is mean absolute RGB channel difference on a 0–255 scale. Lower means smaller pixel error for that comparison.
+
+The evaluation covers nine development edits from three products and one unseen scene family. These are related edits, not nine independent product or scene samples. This study had no sealed test pool.
+
+Visual review found a failure: the adapter often changes the carton color to match the ground color. Some small label text looks distorted.
+
+The scores do not establish label text correctness or product-shape preservation. The new adapter has not been tested on real photos. Keep these results separate from the first study. They do not establish an overall winner.
+
+The study used one A100 and the existing $15 pilot. Delayed gross workspace usage rose from $5.52 at launch to $6.14 at the 09:50:40Z check (+$0.62). Net usage was $0 after credits. This is delayed workspace usage, not the final invoice for this run. Assistant-token costs are separate.
+
+The launcher reported a shutdown-confirmation error. A later read-only check at 09:44:18Z confirmed the app was stopped, with zero tasks and no other active apps.
+
+[Full 3D-scene study report](docs/controlled3d-study-result-2026-10-11.md).
+
+## First synthetic study: flat-background targets
+
+The first study used the original synthetic packaging images.
 
 **Training reduced pixel error on all nine development examples.**
 The original model and trained adapter used the same source images, prompts and random seed.
@@ -36,11 +63,11 @@ There is no claim of beating other image models.
 
 ![Three scenes for one development product: source, target, original model, trained adapter](docs/assets/matched-study-2026-10-09/pack-006.png)
 
-## Real-photo R2 comparison
+## Real-photo R2 comparison: first flat-background adapter
 
-R2 ran seven 512×512 generations on three development products (3 base, 3 saved step-144 adapter, 1 strict-load repeat), with zero training; the repeat matched pixel-for-pixel. [Run details](docs/real-photo-comparison-result-2026-10-10.md).
+R2 tested the original model against the first flat-background adapter in seven 512×512 generations on three development products (3 base, 3 adapter, 1 strict-load repeat), with zero training; the repeat matched pixel-for-pixel. [Run details](docs/real-photo-comparison-result-2026-10-10.md).
 
-Raj selected the original model in all three cases (Barilla A, Kinder Bueno B, Cruesli A). This records overall preference only; geometry, label correctness and background ratings remain pending. Synthetic pixel-error gains did not translate into adapter preference here; three cases do not establish a broad ranking.
+Raj selected the original model in all three cases (Barilla A, Kinder Bueno B, Cruesli A). This records overall preference only; geometry, label correctness and background ratings remain pending. The newer 3D-scene adapter above has not been evaluated on real photos. Three cases do not establish a broad ranking.
 
 ## Scene-data checks
 
@@ -76,7 +103,7 @@ A separate validator and training export are now implemented. The original datas
 - **Protect reserved tests.** Check their metadata without opening their files.
 - **Export training data only.** Match each reference photo to the correct target, even when the input order changes.
 
-These checks do not approve visual quality or prove that every scene setting was captured. A trusted caller must provide a reviewed registry. No fresh data export or GPU run has taken place.
+These checks do not approve visual quality or prove that every scene setting was captured. A trusted caller must provide a reviewed registry. The approved export fed the 2026-10-11 study above; those development results do not clear another GPU run.
 
 [Validator contract and limits](docs/controlled3d-validation.md).
 
@@ -98,7 +125,7 @@ fixtures stay outside new training pools.
 The laptop runs CPU checks only. Model downloads, generation and training run on Modal.
 No employer data or paid LLM-generated labels are used.
 
-## Training run
+## First synthetic study training run
 
 | Item | Result |
 |---|---|
@@ -118,9 +145,9 @@ No employer data or paid LLM-generated labels are used.
 
 [Training design](docs/matched-study.md) · [Pinned trainer and model components](docs/trainer-contract.md)
 
-## Cost: synthetic 144-update study
+## Cost: first synthetic 144-update study
 
-These figures describe the synthetic study, not the R2 run. The pilot allowance is **$15**. The larger $100–$150 experiment budget has not been used.
+These figures describe the first synthetic study, not the later 3D-scene study or the R2 run. The pilot allowance is **$15**. The larger $100–$150 experiment budget has not been used.
 
 | Cost evidence | Amount |
 |---|---:|
@@ -143,19 +170,15 @@ Assistant-token costs are separate and are not included here.
 | [R3](docs/pilot-result-2026-10-08.md) | Eight training updates worked, but the saved-adapter replay failed |
 | [Reload diagnostic](docs/reload-result-2026-10-09.md) | Separate-weight loading matched exactly; combined-weight loading failed the fixed limits |
 | [R4](docs/pilot-result-2026-10-09-r4.md) | Fresh eight-update training and exact replay passed; no quality improvement established |
-| Latest 144-update study | Better synthetic pixel scores; exact replay; all nine cases reported |
+| First synthetic 144-update study | Better synthetic pixel scores; exact replay; all nine cases reported |
 
-In the synthetic 144-update study, the latest launcher reported a shutdown-confirmation error after the worker passed.
+In the first synthetic 144-update study, the launcher reported a shutdown-confirmation error after the worker passed.
 The first independent closure check for that study also failed on the CLI’s workspace-name format.
 A corrected read-only check then confirmed the app was stopped with zero tasks. Both errors remain recorded.
 
 ## Next
 
-1. **Build a larger, separate dataset.** Use new original products and whole background families. Keep all preview products and earlier photo examples out.
-2. **Save and verify the scenes.** Check labels, placement, masks and source pins. Keep training and development groups separate.
-3. **Run one fixed training comparison.** Compare the original model and a reloaded adapter only after the new data and launch plan pass review.
-
-No further GPU run is cleared. Future compute needs a frozen plan, current prices and usage, pinned inputs, exact-source CI, and root review. Barilla, Kinder Bueno and Quaker Cruesli remain development-only. Their detailed output-label and geometry checks are still pending.
+Review text, product shape and background appearance in the new 3D-scene results, separately from pixel-error scores. A later bounded real-photo evaluation of this adapter needs its own reviewed plan. No further GPU run is cleared. Barilla, Kinder Bueno and Quaker Cruesli remain development-only.
 
 ## Development
 
