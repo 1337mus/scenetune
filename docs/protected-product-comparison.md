@@ -73,24 +73,25 @@ Four failed its checks. Visual review also found missing package regions and
 retained background patches. A returned draft does not mean a good cutout.
 None of these masks has been accepted.
 
-The next check uses [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite),
-a small background-removal model, on the same 24 photos.
-It will not train a model or acquire more photos. Its masks still need visual review.
+The next prerequisite check uses pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
+on the same 24 processed photos. It makes 24 first-output calls and four repeat
+calls, with two strict model loads. Training updates: zero.
 
-| Mask check | Fixed limit |
+| Mask prerequisite | Fixed limit |
 | --- | --- |
-| Inputs | The existing 24 processed photos |
-| Model calls | 24 first outputs; 4 fresh-load repeats |
-| Training updates | 0 |
 | Compute | One A10, 2 CPU cores, 8 GiB RAM |
 | Time | 180 seconds startup; 600 seconds execution; zero retries |
-| Allowance | $1 within the new $8 comparison allowance |
+| Cost | Estimated compute $0.27; total step reserve $1 within the $8 allowance |
+| Estimate excludes | Image builds, storage, transfer and shutdown lag |
 
-The model revision, code, weights, input hashes and runtime versions must be fixed
-before launch. No model weights or inference run on the laptop.
-The allowance includes a margin; the time limit is not a provider dollar cap.
-If this method still damages product boundaries, keep the comparison pending.
-Do not lower the mask standard to fill the sample.
+The estimate is not a provider dollar cap. This check uses no new photos or
+training. All inference runs on Modal. The model revision, code, weights, input
+hashes and runtime versions must be fixed before launch. The 7/17 development/test
+group split is tentative and must stay unfrozen until masks are accepted.
+Every generated mask remains a draft until root has reviewed it. Root must also
+verify the app is stopped and has zero running tasks before accepting the mask
+set. If any mask fails review or the stopped-zero proof is missing, the comparison
+stays pending; do not lower the mask standard to fill the sample.
 
 All earlier SceneTune product identities and development brands stay excluded.
 Rendered ABO views do not count as real catalog photos.
