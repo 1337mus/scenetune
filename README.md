@@ -2,8 +2,8 @@
 
 A reference-image editing experiment with **FLUX.2 Klein Base 4B** and a trained LoRA adapter.
 
-The goal is to change a product image’s background while keeping the product intact.
-The first study uses original synthetic packaging images. Real-photo performance is untested.
+The goal is to change product-image backgrounds while keeping products intact.
+The first study used original synthetic packaging images. A bounded real-photo comparison has now generated three development cases; human quality ratings remain pending.
 
 ## Latest result
 
@@ -31,6 +31,12 @@ There is no claim of beating other image models.
 [Read the full study and see all nine examples](docs/matched-study-result-2026-10-09.md).
 
 ![Three scenes for one development product: source, target, original model, trained adapter](docs/assets/matched-study-2026-10-09/pack-006.png)
+
+## Real-photo R2 comparison
+
+R2 completed a zero-training comparison on three development-only products: seven 512×512 images (three base, three saved step-144 adapter, one fresh strict-load repeat). The independent repeat matched at every pixel. [Run details](docs/real-photo-comparison-result-2026-10-10.md).
+
+Assistant visual observations, not human ratings: both approaches produced kitchen scenes with recognizable products. Some package position or size shifts appeared; adapter backgrounds looked smoother and less textured in these cases. Human geometry review, label transcripts and background ratings remain pending. No pixel-quality score or superiority claim is made.
 
 ## What we built
 
@@ -63,9 +69,9 @@ No employer data or paid LLM-generated labels are used.
 
 [Training design](docs/matched-study.md) · [Pinned trainer and model components](docs/trainer-contract.md)
 
-## Cost
+## Cost: synthetic 144-update study
 
-The pilot allowance is **$15**. The larger $100–$150 experiment budget has not been used.
+These figures describe the synthetic study, not the R2 run. The pilot allowance is **$15**. The larger $100–$150 experiment budget has not been used.
 
 | Cost evidence | Amount |
 |---|---:|
@@ -82,24 +88,26 @@ Assistant-token costs are separate and are not included here.
 
 | Run | What it established |
 |---|---|
-| R1 / R2 | Provider configuration failures before GPU inputs; evidence retained privately |
+| Pilot R1 / R2 | Provider configuration failures before GPU inputs; evidence retained privately |
+| Real-photo R1 | Runtime import failed before model loading; no outputs or scores; failure evidence retained |
+| Real-photo R2 | Seven-generation, zero-training development comparison completed; human quality scores pending |
 | [R3](docs/pilot-result-2026-10-08.md) | Eight training updates worked, but the saved-adapter replay failed |
 | [Reload diagnostic](docs/reload-result-2026-10-09.md) | Separate-weight loading matched exactly; combined-weight loading failed the fixed limits |
 | [R4](docs/pilot-result-2026-10-09-r4.md) | Fresh eight-update training and exact replay passed; no quality improvement established |
 | Latest 144-update study | Better synthetic pixel scores; exact replay; all nine cases reported |
 
-The latest launcher reported a shutdown-confirmation error after the worker passed.
-The first independent closure check also failed on the CLI’s workspace-name format.
+In the synthetic 144-update study, the latest launcher reported a shutdown-confirmation error after the worker passed.
+The first independent closure check for that study also failed on the CLI’s workspace-name format.
 A corrected read-only check then confirmed the app was stopped with zero tasks. Both errors remain recorded.
 
 ## Next
 
 - The six OFF candidates and all prepared assets stay private and out of Git. The frozen development set is Barilla, Kinder Bueno, and Quaker Cruesli; keep all three out of training and the final test set.
-- Raj confirmed the source words. Text boxes and product masks remain pending. Geometry review gates opening outputs and scoring, not inference on frozen inputs.
-- Proposed comparison: seven generations (3 base, 3 saved step-144 adapter, 1 fresh strict-load repeat), zero training, at 512×512, seed 7321, 16 steps, guidance 4.
-- The first remote real-photo attempt failed during runtime import before model loading. It produced no images or scores; a read-only check confirmed the app stopped with zero tasks. See the [attempt record](docs/real-photo-comparison-attempt-2026-10-10.md), [source check](docs/real-photo-source-check-2026-10-10.md), and [evaluation plan](docs/real-photo-evaluation.md). No retry or replacement launch has been cleared.
+- Source review is complete for seven word boxes across the three cases and the first two package outlines. Cruesli is a cropped front: exclude whole-package shape and masked-pixel scoring. Output geometry, labels and background ratings remain pending.
+- Completed R2: seven 512×512 generations (3 base, 3 saved step-144 adapter, 1 fresh strict-load repeat), zero training, seed 7321, 16 steps, guidance 4.
+- The first remote attempt (R1) failed during runtime import before model loading and produced no images or scores. The separately authorized R2 comparison completed; see the [R2 result](docs/real-photo-comparison-result-2026-10-10.md). The [R1 attempt record](docs/real-photo-comparison-attempt-2026-10-10.md) and [source check](docs/real-photo-source-check-2026-10-10.md) preserve its evidence; the [evaluation plan](docs/real-photo-evaluation.md) describes the frozen development set. No further launch is cleared.
 
-The launcher shutdown fix landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). Any future launch still needs fresh pins, CI, usage checks, and root review.
+The shared-runner shutdown fix from the synthetic study landed in `0862be8`; exact-source [CI run 38089275451 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38089275451). The real-photo shutdown fix landed in `b39fec4`; exact-source [CI run 38097654443 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38097654443). Any future launch still needs fresh pins, CI, usage checks, and root review.
 
 ## Development
 
