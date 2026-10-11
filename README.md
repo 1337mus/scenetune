@@ -58,13 +58,14 @@ The checker compares recorded product shape, label and font, camera, lighting, m
 | R6 probe | Passed with 4 snapshots and 0 images. |
 | R6 preview | Failed after 1 image: recorded scene fields no longer matched. |
 | R7 probe | Passed with 4 snapshots and 0 images. |
-| R7 preview | Passed: 4 CPU images in 55.0 s total, 2 threads, 96 samples. |
+| Controlled R7 preview | Passed: 4 CPU images in 55.0 s total, 2 threads, 96 samples. |
+| Varied-studio R7 render | Structural checks passed: 12 CPU images; 220.615 s wrapper time; 0 GPU runs and 0 training updates. |
 
 R4, R5, and R6 preview evidence was saved. Their processes stopped and mounts were detached. There were no GPU runs or training updates.
 
-R7 passed the strict checks, but did not explain the earlier R6 failure or prove a general fix. We saw stable box and label positions, visible wall shades, grain, and low contrast. This preview does not approve image quality or data use.
+The controlled-studio R7 preview passed its strict checks, but did not explain the earlier R6 failure or prove a general fix. The later varied-studio R7 render produced 12 development images. Masks match across variants and product positions appear stable as wall colors change. Grain, low contrast, a protruding flat jar label board, and rigid-looking pouch packaging remain. This preview does not approve image quality or data use.
 
-Next is varied development-scene work. [Full results and contact sheet](docs/controlled-studio-preview-2026-10-10.md).
+[Varied-studio R7 report and contact sheets](docs/varied-studio-preview-2026-10-11.md) · [Controlled-studio R2/R3 results](docs/controlled-studio-preview-2026-10-10.md).
 
 ## What we built
 
@@ -130,11 +131,9 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-1. **Prepare reviewed training targets.** The photographic-background composite preserved 43,704 product pixels, but looked oversized and pasted into the room; it stays out of training. Controlled-studio R2/R3 provide one measurable 3D scene recipe. R3 remains visibly grainy, and training remains held.
-
-   [Preview results](docs/controlled-studio-preview-2026-10-10.md) · [Separate 3D data proposal](docs/controlled-studio-data-plan.md) · [Photographic-target findings](docs/photographic-target-plan.md).
-2. **Check the data before training.** Use cleared sources, realistic placement and shadows, and separate product and background families in each data pool. Keep the current reserved tests closed.
-3. **Run a small matched study once the data passes review.** Compare the original model and a fresh adapter on the same inputs. Check saved-adapter reload, product preservation and photo quality separately.
+1. **Prepare a separate validator/export for fresh 3D data.** Use newly created, reviewed product and scene IDs. Keep every ID from this preview out of fresh data pools, training inputs, and reserved tests; preserve the existing dataset contract.
+2. **Improve scene quality before training.** Reduce grain and low contrast, correct the jar label board and pouch appearance, then review fresh renders.
+3. **Review fresh targets before a training study.** Use cleared sources, realistic placement and shadows, and separate product and background families. A matched training study waits until fresh 3D targets are reviewed for data acceptance and visual quality.
 
 No further GPU run is cleared. Future compute needs a frozen plan, current prices and usage, pinned inputs, exact-source CI, and root review. Barilla, Kinder Bueno and Quaker Cruesli remain development-only. Their detailed output-label and geometry checks are still pending.
 
