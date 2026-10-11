@@ -133,6 +133,14 @@ _CONTROLLED3D_PROFILE = _TrainingProfile(
     updates=_MATCHED_TRAINING_STEPS,
     dataset_manifest_sha256=None,
 )
+_PRESERVATION_PROFILE = _TrainingProfile(
+    name="preservation-study",
+    train_pair_count=18,
+    dev_pair_count=9,
+    epochs=8,
+    updates=_MATCHED_TRAINING_STEPS,
+    dataset_manifest_sha256=None,
+)
 CONTROLLED3D_METRIC_REFERENCE = {
     "foreground_mean_absolute_error": "source",
     "target_foreground_mean_absolute_error": "target",
@@ -151,7 +159,9 @@ def _require_training_profile(profile: object) -> _TrainingProfile:
         return _MATCHED_PROFILE
     if profile is _CONTROLLED3D_PROFILE:
         return _CONTROLLED3D_PROFILE
-    raise ValueError("training profile must be one of the three canonical private profiles")
+    if profile is _PRESERVATION_PROFILE:
+        return _PRESERVATION_PROFILE
+    raise ValueError("training profile must be one of the four canonical private profiles")
 
 
 class _WorkerFailure(Exception):
@@ -428,7 +438,11 @@ def _failure_bundle(
     }
     if selected is not _PILOT_PROFILE:
         receipt["study_type"] = (
-            "controlled3d144" if selected is _CONTROLLED3D_PROFILE else "matched144"
+            "controlled3d144"
+            if selected is _CONTROLLED3D_PROFILE
+            else "preservation144"
+            if selected is _PRESERVATION_PROFILE
+            else "matched144"
         )
     artifacts = {
         **saved_artifacts,
@@ -587,6 +601,46 @@ def _load_controlled3d_payload(
     )
 
 
+def _load_preservation_payload(
+    payload_bytes: bytes, run_id: str, work_dir: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, dict[str, str]]:
+    from .preservation_study import (
+        APPROVED_PRESERVATION_MANIFEST_SHA256,
+        PARENT_PAYLOAD_SHA256,
+        validate_preservation_study_payload_bytes,
+    )
+
+    if APPROVED_PRESERVATION_MANIFEST_SHA256 is None:
+        raise ValueError("preservation manifest digest pin is unset")
+    payload = validate_preservation_study_payload_bytes(payload_bytes, run_id)
+    if payload.parent_payload_sha256 != PARENT_PAYLOAD_SHA256:
+        raise ValueError("preservation parent payload does not match the reviewed source")
+    if payload.preservation_manifest_sha256 != APPROVED_PRESERVATION_MANIFEST_SHA256:
+        raise ValueError("preservation derived manifest does not match the reviewed pin")
+    training_root = work_dir / "training-data"
+    for name, content in payload.files.items():
+        if name in {"metadata.json", "preservation_manifest.json"}:
+            continue
+        relative = PurePosixPath(name)
+        if relative.parts[0] not in {"train", "dev"}:
+            raise ValueError("preservation payload contains an unexpected asset path")
+        base = training_root if relative.parts[0] == "train" else work_dir
+        target = base.joinpath(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    training_root.mkdir(parents=True, exist_ok=True)
+    training_root.joinpath("metadata.json").write_bytes(payload.files["metadata.json"])
+    return (
+        list(payload.train_rows),
+        list(payload.dev_rows),
+        payload.source_dataset_manifest_sha256,
+        {
+            "parent_payload_sha256": payload.parent_payload_sha256,
+            "preservation_manifest_sha256": payload.preservation_manifest_sha256,
+        },
+    )
+
+
 def _component_paths(snapshot_dirs: dict[str, Path]) -> tuple[list[list[str]], str]:
     text_files = sorted(
         str(path) for path in (snapshot_dirs["text_encoder"] / "text_encoder").glob("*.safetensors")
@@ -659,6 +713,8 @@ def _guard_profile_optimizer_update(profile: object, completed_updates: int) -> 
     if completed_updates >= selected.updates:
         if selected is _PILOT_PROFILE:
             raise RuntimeError("pilot eight-update limit reached before optimizer step")
+        if selected is _PRESERVATION_PROFILE:
+            raise RuntimeError("preservation-study 144-update limit reached before optimizer step")
         raise RuntimeError("matched-study 144-update limit reached before optimizer step")
 
 
@@ -950,13 +1006,19 @@ def run_remote_controlled3d_study(payload_bytes: bytes, run_id: str) -> bytes:
     return _run_remote_training(payload_bytes, run_id, _CONTROLLED3D_PROFILE)
 
 
+def run_remote_preservation_study(payload_bytes: bytes, run_id: str) -> bytes:
+    """Train the fixed preservation 144-update profile against nine held-out edits."""
+    return _run_remote_training(payload_bytes, run_id, _PRESERVATION_PROFILE)
+
+
 def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> bytes:
-    """Run one of the three closed training profiles through the shared worker body."""
+    """Run one of the four closed training profiles through the shared worker body."""
     selected = _require_training_profile(profile)
     stage = "input_validation"
     started = time.monotonic()
     work_root: Path | None = None
     controlled3d_bindings: dict[str, str] = {}
+    preservation_bindings: dict[str, str] = {}
     progress: dict[str, Any] = {
         "optimizer_updates": 0,
         "optimizer_steps_attempted": 0,
@@ -982,17 +1044,29 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
                 payload_bytes, run_id, work_root
             )
             dev_row = dev_rows[0]
-        else:
+        elif selected is _CONTROLLED3D_PROFILE:
             (train_rows, dev_rows, source_manifest_sha256, controlled3d_bindings) = (
                 _load_controlled3d_payload(payload_bytes, run_id, work_root)
             )
+            dev_row = dev_rows[0]
+        else:
+            (
+                train_rows,
+                dev_rows,
+                source_manifest_sha256,
+                preservation_bindings,
+            ) = _load_preservation_payload(payload_bytes, run_id, work_root)
             dev_row = dev_rows[0]
         expected_manifest = selected.dataset_manifest_sha256
         if selected is _CONTROLLED3D_PROFILE:
             from .controlled3d_study import APPROVED_CONTROLLED3D_MANIFEST_SHA256
 
             expected_manifest = APPROVED_CONTROLLED3D_MANIFEST_SHA256
-        if expected_manifest != source_manifest_sha256:
+        elif selected is _PRESERVATION_PROFILE:
+            from .preservation_study import APPROVED_PRESERVATION_MANIFEST_SHA256
+
+            expected_manifest = APPROVED_PRESERVATION_MANIFEST_SHA256
+        if selected is not _PRESERVATION_PROFILE and expected_manifest != source_manifest_sha256:
             raise ValueError(f"{selected.name} data manifest does not match the reviewed dataset")
         _validate_training_profile_contract(
             selected,
@@ -1438,12 +1512,18 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
             }
         else:
             receipt["study_type"] = (
-                "controlled3d144" if selected is _CONTROLLED3D_PROFILE else "matched144"
+                "controlled3d144"
+                if selected is _CONTROLLED3D_PROFILE
+                else "preservation144"
+                if selected is _PRESERVATION_PROFILE
+                else "matched144"
             )
             receipt["metrics"] = {"per_pair": matched_metrics}
             if selected is _CONTROLLED3D_PROFILE:
                 receipt["controlled3d_provenance"] = controlled3d_bindings
                 receipt["metrics_reference"] = CONTROLLED3D_METRIC_REFERENCE
+            elif selected is _PRESERVATION_PROFILE:
+                receipt["preservation_provenance"] = preservation_bindings
             artifacts = {
                 f"adapter/{adapter_filename}": adapter_path.read_bytes(),
                 **{

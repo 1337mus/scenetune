@@ -316,3 +316,85 @@ def test_controlled3d_worker_fails_closed_before_gpu_when_manifest_pin_is_unset(
     assert receipt["status"] == "failed"
     assert receipt["failure"]["stage"] == "input_validation"
     assert "manifest digest pin is unset" in receipt["failure"]["message"]
+
+
+def test_preservation_profile_is_canonical_and_fails_closed_without_manifest_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import json
+    import zipfile
+
+    from product_scene_editor import preservation_study
+
+    profile = getattr(remote, "_PRESERVATION_PROFILE", None)
+    assert profile is not None, "preservation training profile is missing"
+    assert remote._require_training_profile(profile) is profile
+    remote._validate_training_profile_contract(
+        profile,
+        train_pair_count=18,
+        batch_size=1,
+        dataset_repeat=1,
+        num_epochs=8,
+        gradient_accumulation_steps=1,
+        process_count=1,
+        save_steps=144,
+    )
+    monkeypatch.setattr(preservation_study, "APPROVED_PRESERVATION_MANIFEST_SHA256", None)
+    result = remote.run_remote_preservation_study(b"invalid archive", "preservation-test-001")
+    with zipfile.ZipFile(io.BytesIO(result)) as archive:
+        receipt = json.loads(archive.read("receipt.json"))
+
+    assert receipt["study_type"] == "preservation144"
+    assert receipt["status"] == "failed"
+    assert receipt["failure"]["stage"] == "input_validation"
+    assert "manifest digest pin is unset" in receipt["failure"]["message"]
+
+
+def test_preservation_loader_pins_derived_manifest_separately_from_parent_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from types import SimpleNamespace
+
+    from product_scene_editor import preservation_study
+
+    source_manifest = "a" * 64
+    derived_manifest = "b" * 64
+    payload = SimpleNamespace(
+        source_dataset_manifest_sha256=source_manifest,
+        preservation_manifest_sha256=derived_manifest,
+        parent_payload_sha256=preservation_study.PARENT_PAYLOAD_SHA256,
+        train_rows=[{"pair_id": "train-0"}],
+        dev_rows=[{"pair_id": "dev-0"}],
+        files={
+            "metadata.json": b"[]",
+            "preservation_manifest.json": b"{}",
+            "train/train-0/source.png": b"source",
+            "dev/dev-0/source.png": b"source",
+        },
+    )
+    monkeypatch.setattr(
+        preservation_study, "APPROVED_PRESERVATION_MANIFEST_SHA256", derived_manifest
+    )
+    monkeypatch.setattr(
+        preservation_study,
+        "validate_preservation_study_payload_bytes",
+        lambda _raw, _run_id: payload,
+    )
+
+    train_rows, dev_rows, source_digest, bindings = remote._load_preservation_payload(
+        b"payload", "preservation-run", tmp_path
+    )
+
+    assert train_rows == payload.train_rows
+    assert dev_rows == payload.dev_rows
+    assert source_digest == source_manifest
+    assert source_digest != derived_manifest
+    assert bindings == {
+        "parent_payload_sha256": preservation_study.PARENT_PAYLOAD_SHA256,
+        "preservation_manifest_sha256": derived_manifest,
+    }
+
+    payload.preservation_manifest_sha256 = source_manifest
+    with pytest.raises(ValueError, match="derived manifest"):
+        remote._load_preservation_payload(b"payload", "preservation-run", tmp_path / "reject")

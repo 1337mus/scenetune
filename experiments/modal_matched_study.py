@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from experiments import modal_pilot
-from product_scene_editor import controlled3d_study, matched_study, remote
+from product_scene_editor import controlled3d_study, matched_study, preservation_study, remote
 
 APP_NAME = "product-scene-editor-matched-study"
 RESULT_NAME = "matched-study-result.zip"
@@ -39,11 +39,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-dir", type=Path)
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
     parser.add_argument(
-        "--study-profile", choices=("matched144", "controlled3d144"), default="matched144"
+        "--study-profile",
+        choices=("matched144", "controlled3d144", "preservation144"),
+        default="matched144",
     )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--registry", type=Path)
     parser.add_argument("--train-export-dir", type=Path)
+    parser.add_argument("--parent-payload", type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--launch", action="store_true", help="run one explicitly cleared study")
     mode.add_argument("--recover", action="store_true", help="observe only the recorded Modal call")
@@ -57,6 +60,8 @@ def _parser() -> argparse.ArgumentParser:
 def _remote_worker(payload: bytes, run_id: str, study_profile: str = "matched144") -> bytes:
     if study_profile == "controlled3d144":
         return remote.run_remote_controlled3d_study(payload, run_id)
+    if study_profile == "preservation144":
+        return remote.run_remote_preservation_study(payload, run_id)
     if study_profile != "matched144":
         raise ValueError("unknown study profile")
     return remote.run_remote_matched_study(payload, run_id)
@@ -65,6 +70,8 @@ def _remote_worker(payload: bytes, run_id: str, study_profile: str = "matched144
 def _study_spec(study_profile: str) -> tuple[Any, str, int, int]:
     if study_profile == "controlled3d144":
         return controlled3d_study, "controlled3d144", 18, 9
+    if study_profile == "preservation144":
+        return preservation_study, "preservation144", 18, 9
     if study_profile == "matched144":
         return (
             matched_study,
@@ -89,6 +96,11 @@ def _plan_binding(plan: Any, study_profile: str) -> dict[str, Any]:
             source_registry_sha256=plan.source_registry_sha256,
             validation_proof_sha256=plan.validation_proof_sha256,
             train_export_completion_sha256=plan.train_export_completion_sha256,
+        )
+    elif study_profile == "preservation144":
+        fields.update(
+            parent_payload_sha256=plan.parent_payload_sha256,
+            preservation_manifest_sha256=plan.preservation_manifest_sha256,
         )
     return {"plan_marker_path": marker, **fields}
 
@@ -228,19 +240,32 @@ def _validate_launch_clearance(
         "retries": 0,
         **context,
     }
-    pinned_manifest = (
-        matched_study.APPROVED_DATASET_MANIFEST_SHA256
-        if study_profile == "matched144"
-        else controlled3d_study.APPROVED_CONTROLLED3D_MANIFEST_SHA256
-    )
+    if study_profile == "matched144":
+        pinned_manifest = matched_study.APPROVED_DATASET_MANIFEST_SHA256
+    elif study_profile == "controlled3d144":
+        pinned_manifest = controlled3d_study.APPROVED_CONTROLLED3D_MANIFEST_SHA256
+    else:
+        pinned_manifest = preservation_study.APPROVED_PRESERVATION_MANIFEST_SHA256
+        if pinned_manifest is None:
+            raise ValueError("preservation manifest digest pin is unset")
     pinned_registry = controlled3d_study.APPROVED_CONTROLLED3D_REGISTRY_SHA256
     if (
         hashlib.sha256(payload).hexdigest() != plan.payload_sha256
         or len(payload) != plan.payload_bytes
         or plan.payload_path.is_symlink()
         or plan_marker_path.is_symlink()
-        or plan.source_dataset_manifest_sha256 != pinned_manifest
+        or (
+            study_profile != "preservation144"
+            and plan.source_dataset_manifest_sha256 != pinned_manifest
+        )
         or (study_profile == "controlled3d144" and plan.source_registry_sha256 != pinned_registry)
+        or (
+            study_profile == "preservation144"
+            and (
+                plan.parent_payload_sha256 != preservation_study.PARENT_PAYLOAD_SHA256
+                or plan.preservation_manifest_sha256 != pinned_manifest
+            )
+        )
         or context
         != {
             "profile": remote.PROFILE,
@@ -709,6 +734,16 @@ def _launch(
             and payload.validation_proof_sha256 == plan.validation_proof_sha256
             and payload.train_export_completion_sha256 == plan.train_export_completion_sha256
         )
+    elif study_profile == "preservation144":
+        payload = preservation_study.read_preservation_study_payload(plan)
+        manifest_pin = plan.source_dataset_manifest_sha256
+        derived_manifest_pin = preservation_study.APPROVED_PRESERVATION_MANIFEST_SHA256
+        valid = (
+            derived_manifest_pin is not None
+            and plan.parent_payload_sha256 == preservation_study.PARENT_PAYLOAD_SHA256
+            and plan.preservation_manifest_sha256 == derived_manifest_pin
+            and payload.preservation_manifest_sha256 == derived_manifest_pin
+        )
     else:
         payload = matched_study.read_matched_study_payload(plan)
         manifest_pin = matched_study.APPROVED_DATASET_MANIFEST_SHA256
@@ -726,6 +761,8 @@ def _launch(
     default_clearance = (
         ".context/controlled3d-study-launch-clearance.json"
         if study_profile == "controlled3d144"
+        else ".context/preservation-study-launch-clearance.json"
+        if study_profile == "preservation144"
         else ".context/matched-study-launch-clearance.json"
     )
     clearance = _validate_launch_clearance(
@@ -890,17 +927,20 @@ def _launch(
 
 def _load_plan(output_dir: Path, study_profile: str = "matched144") -> Any:
     spec = _study_spec(study_profile)[0]
-    return (
-        spec.load_matched_study_plan(output_dir)
-        if study_profile == "matched144"
-        else spec.load_controlled3d_study_plan(output_dir)
-    )
+    if study_profile == "matched144":
+        return spec.load_matched_study_plan(output_dir)
+    if study_profile == "controlled3d144":
+        return spec.load_controlled3d_study_plan(output_dir)
+    return spec.load_preservation_study_plan(output_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     study_profile = args.study_profile
-    study_dir = "controlled3d-studies" if study_profile == "controlled3d144" else "matched-studies"
+    study_dir = {
+        "controlled3d144": "controlled3d-studies",
+        "preservation144": "preservation-studies",
+    }.get(study_profile, "matched-studies")
     plan_dir = args.plan_dir or Path(f"artifacts/{study_dir}/{args.run_id}")
     if args.launch or args.recover:
         plan = _load_plan(plan_dir, study_profile)
@@ -923,10 +963,16 @@ def main(argv: list[str] | None = None) -> int:
             study_profile=study_profile,
         )
 
-    if not args.dataset_dir.is_dir():
+    if study_profile == "preservation144":
+        if args.parent_payload is None:
+            raise ValueError("preservation planning requires --parent-payload")
+        plan = preservation_study.plan_preservation_study(
+            args.parent_payload, plan_dir, run_id=args.run_id
+        )
+        payload = preservation_study.read_preservation_study_payload(plan)
+    elif not args.dataset_dir.is_dir():
         raise FileNotFoundError("the reviewed study dataset must be present before planning")
-    payload: Any
-    if study_profile == "controlled3d144":
+    elif study_profile == "controlled3d144":
         if args.manifest is None or args.registry is None or args.train_export_dir is None:
             raise ValueError(
                 "Controlled3D planning requires --manifest, --registry, and --train-export-dir"
@@ -1000,20 +1046,31 @@ def _validate_result_bundle(
         or receipt.get("status") not in {"passed", "failed"}
     ):
         raise ValueError("Modal result receipt does not match this study run")
-    if study_profile == "controlled3d144" and receipt["status"] == "passed":
-        expected_provenance = {
-            "source_registry_sha256": plan.source_registry_sha256,
-            "validation_proof_sha256": plan.validation_proof_sha256,
-            "train_export_completion_sha256": plan.train_export_completion_sha256,
-        }
+    if study_profile in {"controlled3d144", "preservation144"} and receipt["status"] == "passed":
         training = receipt.get("training")
-        if (
-            not isinstance(training, dict)
-            or training.get("source_dataset_manifest_sha256") != plan.source_dataset_manifest_sha256
-            or receipt.get("controlled3d_provenance") != expected_provenance
-            or receipt.get("metrics_reference") != remote.CONTROLLED3D_METRIC_REFERENCE
-        ):
-            raise ValueError("Modal Controlled3D receipt provenance does not bind this plan")
+        source_manifest = (
+            training.get("source_dataset_manifest_sha256") if isinstance(training, dict) else None
+        )
+        if source_manifest != plan.source_dataset_manifest_sha256:
+            raise ValueError("Modal study receipt source manifest does not bind this plan")
+        if study_profile == "controlled3d144":
+            expected_provenance = {
+                "source_registry_sha256": plan.source_registry_sha256,
+                "validation_proof_sha256": plan.validation_proof_sha256,
+                "train_export_completion_sha256": plan.train_export_completion_sha256,
+            }
+            if (
+                receipt.get("controlled3d_provenance") != expected_provenance
+                or receipt.get("metrics_reference") != remote.CONTROLLED3D_METRIC_REFERENCE
+            ):
+                raise ValueError("Modal Controlled3D receipt provenance does not bind this plan")
+        else:
+            expected_provenance = {
+                "parent_payload_sha256": plan.parent_payload_sha256,
+                "preservation_manifest_sha256": plan.preservation_manifest_sha256,
+            }
+            if receipt.get("preservation_provenance") != expected_provenance:
+                raise ValueError("Modal preservation receipt provenance does not bind this plan")
     required = {
         "receipt.json",
         "adapter/step-144.safetensors",

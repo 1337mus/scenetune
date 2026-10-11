@@ -15,7 +15,15 @@ from types import SimpleNamespace
 import pytest
 
 from experiments import modal_matched_study
-from product_scene_editor import matched_study, remote
+from product_scene_editor import matched_study, preservation_study, remote
+
+
+def test_preservation_profile_uses_the_fixed_18_by_9_pair_contract() -> None:
+    _, study_type, training_pairs, development_pairs = modal_matched_study._study_spec(
+        "preservation144"
+    )
+
+    assert (study_type, training_pairs, development_pairs) == ("preservation144", 18, 9)
 
 
 def test_successful_result_must_contain_exact_29_file_contract() -> None:
@@ -607,3 +615,174 @@ def test_remote_worker_dispatches_controlled3d_profile(monkeypatch) -> None:
 
     assert result == b"controlled3d-result"
     assert called == [(b"payload", "controlled3d-run")]
+
+
+def test_preservation_launcher_routes_parent_payload_and_uses_its_plan_dir(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    from types import SimpleNamespace
+
+    parent = tmp_path / "controlled3d-parent.zip"
+    parent.write_bytes(b"parent")
+    plan_dir = tmp_path / "preservation-plan"
+    plan = SimpleNamespace(
+        output_dir=plan_dir,
+        payload_path=plan_dir / preservation_study.PAYLOAD_NAME,
+        run_id="preservation-run",
+        payload_bytes=123,
+        payload_sha256="a" * 64,
+        source_dataset_manifest_sha256="b" * 64,
+        training_pair_ids=tuple(f"train-{index}" for index in range(18)),
+        development_pair_ids=tuple(f"dev-{index}" for index in range(9)),
+        parent_payload_sha256=preservation_study.PARENT_PAYLOAD_SHA256,
+        preservation_manifest_sha256="b" * 64,
+    )
+    payload = SimpleNamespace(train_rows=[{}] * 18, dev_rows=[{}] * 9)
+    planned = []
+    monkeypatch.setattr(
+        preservation_study,
+        "plan_preservation_study",
+        lambda path, output, *, run_id: planned.append((path, output, run_id)) or plan,
+    )
+    monkeypatch.setattr(
+        preservation_study, "read_preservation_study_payload", lambda _plan: payload
+    )
+
+    assert (
+        modal_matched_study.main(
+            [
+                "--study-profile",
+                "preservation144",
+                "--parent-payload",
+                str(parent),
+                "--plan-dir",
+                str(plan_dir),
+                "--run-id",
+                "preservation-run",
+                "--dataset-dir",
+                str(tmp_path / "unused-dataset"),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert planned == [(parent, plan_dir, "preservation-run")]
+    assert output["study_type"] == "preservation144"
+    assert output["training_pairs"] == 18
+    assert output["development_pairs"] == 9
+    assert output["training_steps"] == 144
+    assert output["modal_called"] is False
+
+
+def test_preservation_launch_binding_includes_parent_and_derived_manifest(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    plan = SimpleNamespace(
+        output_dir=tmp_path,
+        source_dataset_manifest_sha256="a" * 64,
+        training_pair_ids=tuple(f"train-{index}" for index in range(18)),
+        development_pair_ids=tuple(f"dev-{index}" for index in range(9)),
+        parent_payload_sha256=preservation_study.PARENT_PAYLOAD_SHA256,
+        preservation_manifest_sha256="b" * 64,
+    )
+
+    binding = modal_matched_study._plan_binding(plan, "preservation144")
+
+    assert binding["study_type"] == "preservation144"
+    assert binding["parent_payload_sha256"] == preservation_study.PARENT_PAYLOAD_SHA256
+    assert binding["preservation_manifest_sha256"] == "b" * 64
+
+
+def test_preservation_success_receipt_must_bind_derived_manifest() -> None:
+    from types import SimpleNamespace
+
+    plan = SimpleNamespace(
+        run_id="preservation-run",
+        development_pair_ids=tuple(f"dev-{index}" for index in range(9)),
+        source_dataset_manifest_sha256="a" * 64,
+        parent_payload_sha256=preservation_study.PARENT_PAYLOAD_SHA256,
+        preservation_manifest_sha256="b" * 64,
+    )
+    receipt = {
+        "run_id": plan.run_id,
+        "study_type": "preservation144",
+        "status": "passed",
+        "training": {"source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256},
+        "preservation_provenance": {
+            "parent_payload_sha256": plan.parent_payload_sha256,
+            "preservation_manifest_sha256": plan.preservation_manifest_sha256,
+        },
+    }
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("receipt.json", json.dumps(receipt))
+        archive.writestr("adapter/step-144.safetensors", b"adapter")
+        for pair_id in plan.development_pair_ids:
+            for mode in ("base", "trained", "reloaded"):
+                archive.writestr(f"images/{pair_id}/{mode}.png", b"image")
+
+    checked, names = modal_matched_study._validate_result_bundle(
+        bundle.getvalue(), plan, "preservation144"
+    )
+    assert (
+        checked["training"]["source_dataset_manifest_sha256"] == plan.source_dataset_manifest_sha256
+    )
+    assert len(names) == 29
+
+    receipt["training"]["source_dataset_manifest_sha256"] = "0" * 64
+    altered = io.BytesIO()
+    with zipfile.ZipFile(altered, "w") as archive:
+        archive.writestr("receipt.json", json.dumps(receipt))
+        for name in names - {"receipt.json"}:
+            archive.writestr(name, b"artifact")
+    with pytest.raises(ValueError, match="source manifest"):
+        modal_matched_study._validate_result_bundle(altered.getvalue(), plan, "preservation144")
+
+    receipt["training"]["source_dataset_manifest_sha256"] = plan.source_dataset_manifest_sha256
+    receipt["preservation_provenance"]["parent_payload_sha256"] = "0" * 64
+    altered = io.BytesIO()
+    with zipfile.ZipFile(altered, "w") as archive:
+        archive.writestr("receipt.json", json.dumps(receipt))
+        for name in names - {"receipt.json"}:
+            archive.writestr(name, b"artifact")
+    with pytest.raises(ValueError, match="preservation receipt provenance"):
+        modal_matched_study._validate_result_bundle(altered.getvalue(), plan, "preservation144")
+
+
+def test_preservation_profile_requires_an_explicit_manifest_pin(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    payload_path = tmp_path / preservation_study.PAYLOAD_NAME
+    payload_path.write_bytes(b"approved payload")
+    plan = SimpleNamespace(
+        output_dir=tmp_path,
+        payload_path=payload_path,
+        run_id="preservation-run",
+        payload_bytes=payload_path.stat().st_size,
+        payload_sha256=hashlib.sha256(payload_path.read_bytes()).hexdigest(),
+        source_dataset_manifest_sha256="a" * 64,
+        training_pair_ids=tuple(f"train-{index}" for index in range(18)),
+        development_pair_ids=tuple(f"dev-{index}" for index in range(9)),
+        parent_payload_sha256=preservation_study.PARENT_PAYLOAD_SHA256,
+        preservation_manifest_sha256="a" * 64,
+    )
+    (tmp_path / preservation_study.RUN_MARKER_NAME).write_bytes(b"plan marker")
+    clearance_path = tmp_path / "clearance.json"
+    clearance_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(preservation_study, "APPROVED_PRESERVATION_MANIFEST_SHA256", None)
+
+    with pytest.raises(ValueError, match="manifest digest pin is unset"):
+        modal_matched_study._validate_launch_clearance(
+            plan,
+            project_root=tmp_path,
+            clearance_path=clearance_path,
+            context={
+                "profile": remote.PROFILE,
+                "workspace": remote.WORKSPACE,
+                "environment": remote.ENVIRONMENT,
+            },
+            study_profile="preservation144",
+        )
