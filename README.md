@@ -4,7 +4,7 @@ Fine-tuning FLUX for product photography.
 
 This personal project is separate from [Reflex](https://github.com/1337mus/reflex).
 
-A reference-image editing experiment with **FLUX.2 Klein Base 4B** and two separate trained LoRA adapters. The first targeted flat synthetic backgrounds; the newer adapter used controlled 3D scenes.
+A reference-image editing experiment with **FLUX.2 Klein Base 4B** and three separately trained LoRA adapters: one for flat synthetic backgrounds, one for controlled 3D scenes, and a preservation follow-up.
 
 The goal is to change product-image backgrounds while keeping products intact. The three-case real-photo comparison tested only the first adapter. The newer 3D-scene adapter has not been tested on real photos.
 
@@ -33,6 +33,10 @@ The study used one A100 and the existing $15 pilot. Delayed gross workspace usag
 The launcher reported a shutdown-confirmation error. A later read-only check at 09:44:18Z confirmed the app was stopped, with zero tasks and no other active apps.
 
 [Full 3D-scene study report](docs/controlled3d-study-result-2026-10-11.md).
+
+## 3D-scene preservation follow-up (development only)
+
+The fresh preservation LoRA lowered mean product-source pixel error by 10.39% versus the prior 3D adapter, but improved only 4/9 edits and missed the background-error limit by a small margin. The combined development goals were not met. Pixel metrics do not score text correctness or overall image quality. [Full preservation study report and contact sheets](docs/preservation-study-result-2026-10-11.md).
 
 ## First synthetic study: flat-background targets
 
@@ -178,7 +182,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-Review text, product shape and background appearance in the new 3D-scene results, separately from pixel-error scores. A later bounded real-photo evaluation of this adapter needs its own reviewed plan. No further GPU run is cleared. Barilla, Kinder Bueno and Quaker Cruesli remain development-only.
+Review text, product shape and background appearance in the new 3D-scene results separately from pixel-error scores. A paired real-photo plan comparing the 3D-scene and preservation adapters is assembled, but source CI and clearance are still pending; no GPU call has launched. Barilla, Kinder Bueno and Quaker Cruesli remain development-only.
 
 ## Development
 

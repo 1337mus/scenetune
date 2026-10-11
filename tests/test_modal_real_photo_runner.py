@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -312,6 +315,100 @@ def _fixture_plan(tmp_path):
     )
     plan.payload_path.write_bytes(b"payload")
     return plan
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["modal_sdk", "diffsynth_commit", "runtime_pins", "model_components"],
+)
+def test_legacy_clearance_keeps_all_frozen_runtime_pins_required(
+    tmp_path, monkeypatch, missing_field
+) -> None:
+    plan = _fixture_plan(tmp_path)
+    payload_bytes = plan.payload_path.read_bytes()
+    plan = replace(
+        plan,
+        payload_bytes=len(payload_bytes),
+        payload_sha256=runner.hashlib.sha256(payload_bytes).hexdigest(),
+    )
+    marker_fields = {
+        "preparation_sha256": "c" * 64,
+        "geometry_review_sha256": "d" * 64,
+        "geometry_review_status": "not_present",
+        "active_intake_sha256": "e" * 64,
+        "label_confirmation_sha256": "f" * 64,
+        "private_source_review_sha256": "a" * 64,
+        "quality_review_status": "pending_human_geometry_review",
+    }
+    plan.marker.update(marker_fields)
+    marker_path = plan.output_dir / runner.runner.RUN_MARKER_NAME
+    marker_path.write_bytes(b"legacy marker fixture")
+    context = dict(runner.CONTEXT)
+    now = datetime.now(UTC)
+    source_commit = "b" * 40
+    clearance = {
+        "schema_version": 1,
+        "run_id": plan.run_id,
+        "status": "approved",
+        "review_status": "approved",
+        "ci_status": "success",
+        "payload_sha256": plan.payload_sha256,
+        "plan_sha256": runner.hashlib.sha256(marker_path.read_bytes()).hexdigest(),
+        **marker_fields,
+        "case_ids": list(runner.runner.CASE_IDS),
+        "adapter_archive_sha256": runner.runner.ADAPTER_ARCHIVE_SHA256,
+        "adapter_member_sha256": runner.runner.ADAPTER_MEMBER_SHA256,
+        "generation_settings": runner.runner.GENERATION_SETTINGS,
+        "schedule": list(runner.runner.generation_schedule()),
+        "gpu": runner.GPU,
+        "cores": runner.CORES,
+        "memory_gib": runner.MEMORY_GIB,
+        "startup_timeout_seconds": runner.REMOTE_STARTUP_TIMEOUT_SECONDS,
+        "timeout_seconds": runner.REMOTE_TIMEOUT_SECONDS,
+        "max_calls": 1,
+        "retries": 0,
+        "allowance_usd": runner.ALLOWANCE_USD,
+        "modal_sdk": "1.6.1",
+        "diffsynth_commit": runner.remote.DIFFSYNTH_COMMIT,
+        "runtime_pins": runner.remote.RUNTIME_PINS,
+        "model_components": runner.remote.MODEL_COMPONENTS,
+        **context,
+        "source_commit": source_commit,
+        "checked_at": now.isoformat(),
+    }
+
+    def run_git(_root: Path, *arguments: str) -> str:
+        if arguments[0] == "status":
+            return ""
+        if arguments[0] == "rev-parse":
+            return source_commit
+        assert arguments == ("verify-commit", "HEAD")
+        return ""
+
+    monkeypatch.setattr(runner, "_run_git", run_git)
+    clearance_path = tmp_path / "clearance.json"
+    clearance_path.write_text(json.dumps(clearance), encoding="utf-8")
+    assert (
+        runner._validate_clearance(
+            plan,
+            project_root=tmp_path,
+            clearance_path=clearance_path,
+            context=context,
+            now=now,
+        )
+        == clearance
+    )
+
+    clearance.pop(missing_field)
+    clearance_path.write_text(json.dumps(clearance), encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match the immutable plan"):
+        runner._validate_clearance(
+            plan,
+            project_root=tmp_path,
+            clearance_path=clearance_path,
+            context=context,
+            now=now,
+        )
 
 
 def test_recovery_of_unknown_same_call_preserves_work_and_ids(tmp_path, monkeypatch) -> None:
@@ -825,3 +922,303 @@ def test_only_modal_function_timeout_confirms_worker_failure(tmp_path, monkeypat
     assert marker["status"] == "worker_failed"
     assert marker["shutdown_status"] == "stopped"
     assert stopped == ["ap-terminal-timeout"]
+
+
+def test_parser_exposes_explicit_preservation_pair_inputs() -> None:
+    args = runner._parser().parse_args(
+        [
+            "--comparison-profile",
+            "preservation-pair",
+            "--run-id",
+            "paired-run",
+            "--plan-dir",
+            "artifacts/paired-run",
+            "--legacy-input",
+            "legacy.zip",
+            "--prior-adapter-archive",
+            "prior.zip",
+            "--new-adapter-archive",
+            "new.zip",
+            "--confirmation",
+            "confirmation.json",
+        ]
+    )
+    assert args.comparison_profile == "preservation-pair"
+    assert args.run_id == "paired-run"
+    assert str(args.plan_dir) == "artifacts/paired-run"
+    assert str(args.legacy_input) == "legacy.zip"
+    assert str(args.prior_adapter_archive) == "prior.zip"
+    assert str(args.new_adapter_archive) == "new.zip"
+    assert str(args.confirmation) == "confirmation.json"
+
+
+def test_pair_profile_rejects_missing_explicit_plan_inputs_before_io() -> None:
+    with pytest.raises(ValueError, match="preservation-pair requires explicit"):
+        runner.main(["--comparison-profile", "preservation-pair"])
+
+
+def _pair_fixture_plan(output_dir):
+    case_ids = ("OFF-R1-003", "OFF-R1-005", "OFF-R1-006")
+    schedule = [
+        {"case_id": case_id, "arm": arm, "session": session}
+        for arm, session in (
+            ("base", "base"),
+            ("prior", "prior-strict-1"),
+            ("prior_reloaded", "prior-strict-2"),
+            ("new", "new-strict-1"),
+            ("new_reloaded", "new-strict-2"),
+        )
+        for case_id in case_ids
+    ]
+    plan = runner.RealPhotoPlan(
+        output_dir=output_dir,
+        payload_path=output_dir / "payload.zip",
+        run_id="paired-fixture",
+        payload_bytes=7,
+        payload_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        marker={"profile": "preservation-pair", "schedule": schedule},
+    )
+    plan.payload_path.write_bytes(b"payload")
+    return plan, schedule
+
+
+def test_pair_recovery_observes_only_the_recorded_call_from_observing_state(
+    tmp_path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    plan, schedule = _pair_fixture_plan(tmp_path)
+    context = dict(runner.CONTEXT)
+    attempt_path = runner._reserve_attempt(plan, "f" * 40, context)
+    runner._update_attempt_marker(
+        attempt_path,
+        status="observing",
+        app_id="ap-pair-original",
+        call_id="fc-pair-original",
+        spawn_count=1,
+    )
+    looked_up = []
+    finished = []
+    stopped = []
+
+    class Call:
+        def get(self, *, timeout):
+            assert timeout == 0
+            return b"same-call-result"
+
+    fake_modal = SimpleNamespace(
+        FunctionCall=SimpleNamespace(from_id=lambda call_id: looked_up.append(call_id) or Call())
+    )
+    monkeypatch.setitem(__import__("sys").modules, "modal", fake_modal)
+    monkeypatch.setattr(runner.importlib.metadata, "version", lambda _name: "1.6.1")
+    monkeypatch.setattr(runner.remote, "validate_launch_environment", lambda _context: None)
+    monkeypatch.setattr(runner.remote, "verify_modal_identity", lambda **_context: None)
+
+    def finish(_plan, marker_path, result, *, app_id, call_id, receipt_path):
+        finished.append((result, app_id, call_id, receipt_path))
+        runner._update_attempt_marker(
+            marker_path,
+            status="worker_returned",
+            worker_status="passed",
+            app_id=app_id,
+            call_id=call_id,
+        )
+        return 0
+
+    monkeypatch.setattr(runner, "_finish_result", finish)
+    monkeypatch.setattr(
+        runner, "_stop_and_confirm", lambda app_id, **_kwargs: stopped.append(app_id)
+    )
+
+    assert runner._recover(plan, context=context) == 0
+
+    marker = json.loads(attempt_path.read_text())
+    assert looked_up == ["fc-pair-original"]
+    assert finished[0][:3] == (b"same-call-result", "ap-pair-original", "fc-pair-original")
+    assert stopped == ["ap-pair-original"]
+    assert marker["status"] == "worker_returned"
+    assert marker["app_id"] == "ap-pair-original"
+    assert marker["call_id"] == "fc-pair-original"
+    assert marker["comparison_profile"] == "preservation-pair"
+    assert marker["payload_sha256"] == plan.payload_sha256
+    assert marker["plan_sha256"] == plan.plan_sha256
+    assert marker["source_commit"] == "f" * 40
+    assert marker["timeout_seconds"] == 1800
+    assert marker["schedule"] == schedule
+    assert all(marker[key] == value for key, value in context.items())
+    with pytest.raises(ValueError, match="immutable"):
+        runner._update_attempt_marker(attempt_path, call_id="fc-not-the-original")
+
+
+def test_pair_recovery_observation_error_stays_unknown_and_never_spawns_again(
+    tmp_path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    plan, _schedule = _pair_fixture_plan(tmp_path)
+    context = dict(runner.CONTEXT)
+    attempt_path = runner._reserve_attempt(plan, "f" * 40, context)
+    runner._update_attempt_marker(
+        attempt_path,
+        status="observing",
+        app_id="ap-pair-original",
+        call_id="fc-pair-original",
+        spawn_count=1,
+    )
+    looked_up = []
+    stopped = []
+    observation_error = RuntimeError("provider observation unavailable")
+
+    class Call:
+        def get(self, *, timeout):
+            assert timeout == 0
+            raise observation_error
+
+    fake_modal = SimpleNamespace(
+        FunctionCall=SimpleNamespace(from_id=lambda call_id: looked_up.append(call_id) or Call())
+    )
+    monkeypatch.setitem(__import__("sys").modules, "modal", fake_modal)
+    monkeypatch.setattr(runner.importlib.metadata, "version", lambda _name: "1.6.1")
+    monkeypatch.setattr(runner.remote, "validate_launch_environment", lambda _context: None)
+    monkeypatch.setattr(runner.remote, "verify_modal_identity", lambda **_context: None)
+    monkeypatch.setattr(
+        runner, "_stop_and_confirm", lambda app_id, **_kwargs: stopped.append(app_id)
+    )
+
+    assert runner._recover(plan, context=context) == 1
+    marker = json.loads(attempt_path.read_text())
+    assert looked_up == ["fc-pair-original"]
+    assert stopped == []
+    assert marker["status"] == "observation_unknown"
+    assert marker["worker_failure_confirmed"] is False
+    assert marker["app_id"] == "ap-pair-original"
+    assert marker["call_id"] == "fc-pair-original"
+    assert marker["shutdown_status"] == "pending"
+
+
+@pytest.mark.parametrize("action", ["--launch", "--recover"])
+def test_requested_pair_profile_must_match_plan_marker_before_action(
+    tmp_path, monkeypatch, action
+) -> None:
+    mismatched_plan = runner.RealPhotoPlan(
+        output_dir=tmp_path,
+        payload_path=tmp_path / "payload.zip",
+        run_id="paired-fixture",
+        payload_bytes=0,
+        payload_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        marker={"profile": "legacy"},
+    )
+    monkeypatch.setattr(runner, "_load_plan", lambda _output: mismatched_plan)
+    monkeypatch.setattr(runner, "_launch", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(runner, "_recover", lambda *_args, **_kwargs: 0)
+    with pytest.raises(ValueError, match="requested comparison profile"):
+        runner.main(
+            [
+                "--comparison-profile",
+                "preservation-pair",
+                "--run-id",
+                "paired-fixture",
+                "--plan-dir",
+                str(tmp_path),
+                "--legacy-input",
+                "legacy.zip",
+                "--prior-adapter-archive",
+                "prior.zip",
+                "--new-adapter-archive",
+                "new.zip",
+                "--confirmation",
+                "confirmation.json",
+                action,
+                "--profile",
+                runner.remote.PROFILE,
+                "--workspace",
+                runner.remote.WORKSPACE,
+                "--environment",
+                runner.remote.ENVIRONMENT,
+            ]
+        )
+
+
+def test_pair_plan_creation_uses_comparison_builder_and_explicit_sources(tmp_path, monkeypatch):
+    from product_scene_editor import real_photo_comparison as comparison
+
+    plan_dir = tmp_path / "paired-plan"
+    sources = {
+        "legacy_input": tmp_path / "legacy.zip",
+        "prior_adapter_archive": tmp_path / "prior.zip",
+        "new_adapter_archive": tmp_path / "new.zip",
+        "confirmation": tmp_path / "confirmation.json",
+    }
+    calls = []
+    record = {"profile": "preservation-pair", "run_id": "paired-fixture"}
+
+    def create(root, output, *, run_id, **kwargs):
+        calls.append((root, output, run_id, kwargs))
+        return record
+
+    monkeypatch.setattr(comparison, "create_comparison_plan", create, raising=False)
+    monkeypatch.setattr(
+        runner.runner,
+        "create_real_photo_plan",
+        lambda *_args, **_kwargs: pytest.fail("paired profile used the legacy plan builder"),
+    )
+
+    assert (
+        runner.main(
+            [
+                "--comparison-profile",
+                "preservation-pair",
+                "--run-id",
+                "paired-fixture",
+                "--plan-dir",
+                str(plan_dir),
+                "--legacy-input",
+                str(sources["legacy_input"]),
+                "--prior-adapter-archive",
+                str(sources["prior_adapter_archive"]),
+                "--new-adapter-archive",
+                str(sources["new_adapter_archive"]),
+                "--confirmation",
+                str(sources["confirmation"]),
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        (
+            Path(runner.__file__).resolve().parents[1],
+            plan_dir,
+            "paired-fixture",
+            {
+                "legacy_input": sources["legacy_input"],
+                "prior_archive": sources["prior_adapter_archive"],
+                "new_archive": sources["new_adapter_archive"],
+                "confirmation": sources["confirmation"],
+            },
+        )
+    ]
+
+
+def test_pair_worker_dispatches_payload_to_paired_inference(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+
+    import product_scene_editor
+
+    calls = []
+    fake_module = ModuleType("product_scene_editor.real_photo_comparison_inference")
+
+    def infer(payload, run_id):
+        calls.append((payload, run_id))
+        return b"paired-result"
+
+    fake_module.run_remote_real_photo_comparison = infer
+    monkeypatch.setitem(sys.modules, fake_module.__name__, fake_module)
+    monkeypatch.setattr(
+        product_scene_editor, "real_photo_comparison_inference", fake_module, raising=False
+    )
+
+    assert runner._remote_comparison_worker(b"paired-payload", "paired-run") == b"paired-result"
+    assert calls == [(b"paired-payload", "paired-run")]

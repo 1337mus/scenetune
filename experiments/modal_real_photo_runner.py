@@ -29,6 +29,13 @@ RECOVERY_FAILURE_NAME = "real-photo-modal-recovery-failure-receipt.json"
 UNVERIFIED_NAME = "real-photo-unverified-result.bin"
 REMOTE_STARTUP_TIMEOUT_SECONDS = 300
 REMOTE_TIMEOUT_SECONDS = 900
+PAIR_REMOTE_TIMEOUT_SECONDS = 1800
+PAIR_PROFILE = "preservation-pair"
+DEFAULT_RUN_ID = "real-photo-off-r1-2026-10-10-r1"
+DEFAULT_PLAN_DIR = Path("artifacts/real-photo-runs/real-photo-off-r1-2026-10-10-r1")
+DEFAULT_ADAPTER_ARCHIVE = Path(
+    "artifacts/matched-studies/klein-edit-matched-2026-10-09-r1/matched-study-result.zip"
+)
 GPU = "A100-80GB"
 CORES = 4
 MEMORY_GIB = 64
@@ -55,19 +62,22 @@ class RealPhotoPlan:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", default="real-photo-off-r1-2026-10-10-r1")
+    parser.add_argument("--run-id")
     parser.add_argument(
         "--plan-dir",
         type=Path,
-        default=Path("artifacts/real-photo-runs/real-photo-off-r1-2026-10-10-r1"),
+        default=None,
     )
     parser.add_argument(
         "--adapter-archive",
         type=Path,
-        default=Path(
-            "artifacts/matched-studies/klein-edit-matched-2026-10-09-r1/matched-study-result.zip"
-        ),
+        default=None,
     )
+    parser.add_argument("--comparison-profile", choices=("preservation-pair",))
+    parser.add_argument("--legacy-input", type=Path)
+    parser.add_argument("--prior-adapter-archive", type=Path)
+    parser.add_argument("--new-adapter-archive", type=Path)
+    parser.add_argument("--confirmation", type=Path)
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--launch", action="store_true", help="run the explicitly cleared plan")
     action.add_argument("--recover", action="store_true", help="observe only the recorded call")
@@ -127,6 +137,12 @@ def _update_attempt_marker(path: Path, **updates: Any) -> dict[str, Any]:
     return marker
 
 
+def _comparison_module() -> Any:
+    from product_scene_editor import real_photo_comparison
+
+    return real_photo_comparison
+
+
 def _load_plan(output_dir: Path) -> RealPhotoPlan:
     if output_dir.is_symlink() or not output_dir.is_dir():
         raise ValueError("real-photo plan directory is missing or unsafe")
@@ -142,6 +158,18 @@ def _load_plan(output_dir: Path) -> RealPhotoPlan:
         raise ValueError("real-photo plan marker or payload is missing or invalid") from exc
     if not isinstance(marker, dict):
         raise ValueError("real-photo plan marker must be a JSON object")
+    if marker.get("profile") == PAIR_PROFILE:
+        comparison = _comparison_module()
+        marker = comparison.load_plan_record(output_dir)
+        return RealPhotoPlan(
+            output_dir=output_dir,
+            payload_path=payload_path,
+            run_id=marker["run_id"],
+            payload_bytes=marker["payload_bytes"],
+            payload_sha256=marker["payload_sha256"],
+            plan_sha256=marker["plan_sha256"],
+            marker=marker,
+        )
     digest = hashlib.sha256(payload).hexdigest()
     if (
         marker.get("schema_version") != 1
@@ -239,40 +267,52 @@ def _validate_clearance(
         raise ValueError("real-photo clearance or bound plan is missing or invalid") from exc
     if not isinstance(clearance, dict):
         raise ValueError("real-photo launch clearance must be a JSON object")
+    paired = plan.marker.get("profile") == PAIR_PROFILE
     expected = {
         "schema_version": 1,
-        "run_id": plan.run_id,
         "status": "approved",
         "review_status": "approved",
         "ci_status": "success",
         "payload_sha256": plan.payload_sha256,
-        "plan_sha256": hashlib.sha256(marker_bytes).hexdigest(),
-        "preparation_sha256": plan.marker["preparation_sha256"],
-        "geometry_review_sha256": plan.marker["geometry_review_sha256"],
-        "geometry_review_status": plan.marker["geometry_review_status"],
-        "active_intake_sha256": plan.marker["active_intake_sha256"],
-        "label_confirmation_sha256": plan.marker["label_confirmation_sha256"],
-        "private_source_review_sha256": plan.marker["private_source_review_sha256"],
-        "quality_review_status": plan.marker["quality_review_status"],
-        "case_ids": list(runner.CASE_IDS),
-        "adapter_archive_sha256": runner.ADAPTER_ARCHIVE_SHA256,
-        "adapter_member_sha256": runner.ADAPTER_MEMBER_SHA256,
-        "generation_settings": runner.GENERATION_SETTINGS,
-        "schedule": list(runner.generation_schedule()),
         "gpu": GPU,
         "cores": CORES,
         "memory_gib": MEMORY_GIB,
         "startup_timeout_seconds": REMOTE_STARTUP_TIMEOUT_SECONDS,
-        "timeout_seconds": REMOTE_TIMEOUT_SECONDS,
+        "timeout_seconds": _plan_timeout_seconds(plan),
         "max_calls": 1,
         "retries": 0,
         "allowance_usd": ALLOWANCE_USD,
-        "modal_sdk": "1.6.1",
-        "diffsynth_commit": remote.DIFFSYNTH_COMMIT,
-        "runtime_pins": remote.RUNTIME_PINS,
-        "model_components": remote.MODEL_COMPONENTS,
-        **context,
     }
+    if paired:
+        expected.update(
+            plan_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+            **_comparison_module().clearance_bindings(plan.marker),
+            modal_profile=context["profile"],
+            workspace=context["workspace"],
+            environment=context["environment"],
+        )
+    else:
+        expected.update(
+            run_id=plan.run_id,
+            plan_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+            preparation_sha256=plan.marker["preparation_sha256"],
+            geometry_review_sha256=plan.marker["geometry_review_sha256"],
+            geometry_review_status=plan.marker["geometry_review_status"],
+            active_intake_sha256=plan.marker["active_intake_sha256"],
+            label_confirmation_sha256=plan.marker["label_confirmation_sha256"],
+            private_source_review_sha256=plan.marker["private_source_review_sha256"],
+            quality_review_status=plan.marker["quality_review_status"],
+            case_ids=list(runner.CASE_IDS),
+            adapter_archive_sha256=runner.ADAPTER_ARCHIVE_SHA256,
+            adapter_member_sha256=runner.ADAPTER_MEMBER_SHA256,
+            generation_settings=runner.GENERATION_SETTINGS,
+            schedule=list(runner.generation_schedule()),
+            modal_sdk="1.6.1",
+            diffsynth_commit=remote.DIFFSYNTH_COMMIT,
+            runtime_pins=remote.RUNTIME_PINS,
+            model_components=remote.MODEL_COMPONENTS,
+            **context,
+        )
     if (
         set(clearance) != set(expected) | {"source_commit", "checked_at"}
         or any(clearance.get(key) != value for key, value in expected.items())
@@ -341,8 +381,15 @@ def _attempt_path(plan: RealPhotoPlan) -> Path:
     return plan.output_dir / ATTEMPT_NAME
 
 
+def _plan_timeout_seconds(plan: RealPhotoPlan) -> int:
+    if plan.marker.get("profile") == PAIR_PROFILE:
+        return PAIR_REMOTE_TIMEOUT_SECONDS
+    return REMOTE_TIMEOUT_SECONDS
+
+
 def _reserve_attempt(plan: RealPhotoPlan, source_commit: str, context: dict[str, str]) -> Path:
     path = _attempt_path(plan)
+    paired = plan.marker.get("profile") == PAIR_PROFILE
     _write_once(
         path,
         {
@@ -354,11 +401,16 @@ def _reserve_attempt(plan: RealPhotoPlan, source_commit: str, context: dict[str,
             "plan_sha256": plan.plan_sha256,
             "case_ids": list(runner.CASE_IDS),
             "generation_settings": runner.GENERATION_SETTINGS,
+            **(
+                {"comparison_profile": PAIR_PROFILE, "schedule": plan.marker["schedule"]}
+                if paired
+                else {}
+            ),
             "gpu": GPU,
             "cores": CORES,
             "memory_gib": MEMORY_GIB,
             "startup_timeout_seconds": REMOTE_STARTUP_TIMEOUT_SECONDS,
-            "timeout_seconds": REMOTE_TIMEOUT_SECONDS,
+            "timeout_seconds": _plan_timeout_seconds(plan),
             "max_calls": 1,
             "call_count": 1,
             "spawn_count": 0,
@@ -486,8 +538,28 @@ def _is_function_timeout(error: BaseException, modal_module: Any | None) -> bool
     return isinstance(timeout_type, type) and isinstance(error, timeout_type)
 
 
+def _result_byte_limit(plan: RealPhotoPlan) -> int:
+    if plan.marker.get("profile") == PAIR_PROFILE:
+        return int(_comparison_module().MAX_RESULT_BYTES)
+    return runner.MAX_RESULT_BYTES
+
+
+def _validate_result_bundle(plan: RealPhotoPlan, data: bytes) -> tuple[dict[str, Any], set[str]]:
+    validator = (
+        _comparison_module().validate_result_bundle
+        if plan.marker.get("profile") == PAIR_PROFILE
+        else runner.validate_result_bundle
+    )
+    return validator(
+        data,
+        plan.run_id,
+        expected_plan=plan.marker,
+        expected_payload_sha256=plan.payload_sha256,
+    )
+
+
 def _preserve_unverified_result(plan: RealPhotoPlan, result: object) -> dict[str, Any] | None:
-    if not isinstance(result, bytes) or not result or len(result) > runner.MAX_RESULT_BYTES:
+    if not isinstance(result, bytes) or not result or len(result) > _result_byte_limit(plan):
         return None
     path = plan.output_dir / UNVERIFIED_NAME
     with path.open("xb") as stream:
@@ -514,12 +586,7 @@ def _finish_result(
     try:
         if not isinstance(result_bytes, bytes):
             raise ValueError("Modal returned a non-byte result")
-        receipt, _names = runner.validate_result_bundle(
-            result_bytes,
-            plan.run_id,
-            expected_plan=plan.marker,
-            expected_payload_sha256=plan.payload_sha256,
-        )
+        receipt, _names = _validate_result_bundle(plan, result_bytes)
         with result_path.open("xb") as stream:
             stream.write(result_bytes)
             stream.flush()
@@ -645,6 +712,11 @@ def _launch(
         if isinstance(app_id_value, str) and app_id_value:
             app_id = app_id_value
             _update_attempt_marker(attempt_path, app_id=app_id)
+        worker = (
+            _remote_comparison_worker
+            if plan.marker.get("profile") == PAIR_PROFILE
+            else _remote_worker
+        )
         run_once = app.function(
             gpu=GPU,
             cpu=(float(CORES), float(CORES)),
@@ -659,8 +731,8 @@ def _launch(
             serialized=True,
             include_source=False,
             startup_timeout=REMOTE_STARTUP_TIMEOUT_SECONDS,
-            timeout=REMOTE_TIMEOUT_SECONDS,
-        )(_remote_worker)
+            timeout=_plan_timeout_seconds(plan),
+        )(worker)
         phase = "modal_app_startup"
         with modal.enable_output(), app.run(environment_name=context["environment"], detach=True):
             if app_id is None:
@@ -765,22 +837,48 @@ def _validate_attempt(plan: RealPhotoPlan) -> dict[str, Any]:
         marker = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("real-photo attempt marker is invalid") from exc
+    paired = plan.marker.get("profile") == PAIR_PROFILE
+    allowed_statuses = {"observation_unknown", "shutdown_error"}
+    if paired:
+        allowed_statuses.add("observing")
+        expected = {
+            "comparison_profile": PAIR_PROFILE,
+            "schedule": plan.marker.get("schedule"),
+            "profile": remote.PROFILE,
+            "workspace": remote.WORKSPACE,
+            "environment": remote.ENVIRONMENT,
+            "gpu": GPU,
+            "cores": CORES,
+            "memory_gib": MEMORY_GIB,
+            "startup_timeout_seconds": REMOTE_STARTUP_TIMEOUT_SECONDS,
+            "timeout_seconds": PAIR_REMOTE_TIMEOUT_SECONDS,
+            "max_calls": 1,
+            "call_count": 1,
+            "retries": 0,
+        }
+        if not isinstance(marker, dict) or any(
+            marker.get(key) != value for key, value in expected.items()
+        ):
+            raise ValueError("paired attempt marker does not match its immutable runtime contract")
     if (
         not isinstance(marker, dict)
         or marker.get("run_id") != plan.run_id
         or marker.get("payload_sha256") != plan.payload_sha256
         or marker.get("plan_sha256") != plan.plan_sha256
-        or marker.get("status") not in {"observation_unknown", "shutdown_error"}
+        or marker.get("status") not in allowed_statuses
         or marker.get("call_count") != 1
         or marker.get("spawn_count") not in {0, 1}
         or not isinstance(marker.get("app_id"), str)
         or not marker["app_id"]
+        or (paired and marker.get("status") == "observing" and marker.get("spawn_count") != 1)
         or marker.get("call_id") is not None
         and (
             not isinstance(marker.get("call_id"), str)
-            or not marker["call_id"]
+            or not marker.get("call_id")
             or marker.get("spawn_count") != 1
         )
+        or (paired and marker.get("status") == "observing" and not marker.get("call_id"))
+        or (paired and not re.fullmatch(r"[0-9a-f]{40}", str(marker.get("source_commit", ""))))
     ):
         raise ValueError("only the originally recorded unknown call can be recovered")
     return marker
@@ -792,12 +890,7 @@ def _recover(plan: RealPhotoPlan, *, context: dict[str, str]) -> int:
     if result_path.exists() or result_path.is_symlink():
         if result_path.is_symlink() or not result_path.is_file():
             raise ValueError("real-photo result path is unsafe")
-        runner.validate_result_bundle(
-            result_path.read_bytes(),
-            plan.run_id,
-            expected_plan=plan.marker,
-            expected_payload_sha256=plan.payload_sha256,
-        )
+        _validate_result_bundle(plan, result_path.read_bytes())
         if marker.get("status") != "shutdown_error":
             raise FileExistsError("real-photo result already exists; refusing to overwrite it")
         remote.validate_launch_environment(context)
@@ -929,21 +1022,58 @@ def _remote_worker(payload: bytes, run_id: str) -> bytes:
     return run_remote_real_photo_inference(payload, run_id)
 
 
+def _remote_comparison_worker(payload: bytes, run_id: str) -> bytes:
+    import product_scene_editor.real_photo_comparison_inference as inference
+
+    return inference.run_remote_real_photo_comparison(payload, run_id)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.comparison_profile == PAIR_PROFILE:
+        required = (
+            "run_id",
+            "plan_dir",
+            "legacy_input",
+            "prior_adapter_archive",
+            "new_adapter_archive",
+            "confirmation",
+        )
+        missing = [name.replace("_", "-") for name in required if getattr(args, name) is None]
+        if missing:
+            raise ValueError("preservation-pair requires explicit " + ", ".join(missing))
+        if args.adapter_archive is not None:
+            raise ValueError("preservation-pair cannot use the legacy --adapter-archive option")
+    else:
+        args.run_id = args.run_id or DEFAULT_RUN_ID
+        args.plan_dir = args.plan_dir or DEFAULT_PLAN_DIR
+        legacy_adapter_archive: Path = args.adapter_archive or DEFAULT_ADAPTER_ARCHIVE
     root = Path(__file__).resolve().parents[1]
     if not args.launch and not args.recover:
         if not args.plan_dir.parent.exists():
             args.plan_dir.parent.mkdir(parents=True, exist_ok=True)
-        plan_record = runner.create_real_photo_plan(
-            root,
-            args.plan_dir,
-            run_id=args.run_id,
-            adapter_archive=args.adapter_archive,
-        )
+        if args.comparison_profile == PAIR_PROFILE:
+            plan_record = _comparison_module().create_comparison_plan(
+                root,
+                args.plan_dir,
+                run_id=args.run_id,
+                legacy_input=args.legacy_input,
+                prior_archive=args.prior_adapter_archive,
+                new_archive=args.new_adapter_archive,
+                confirmation=args.confirmation,
+            )
+        else:
+            plan_record = runner.create_real_photo_plan(
+                root,
+                args.plan_dir,
+                run_id=args.run_id,
+                adapter_archive=legacy_adapter_archive,
+            )
         print(json.dumps(plan_record, ensure_ascii=False, sort_keys=True))
         return 0
     plan = _load_plan(args.plan_dir)
+    if plan.marker.get("profile") != args.comparison_profile:
+        raise ValueError("requested comparison profile does not match the immutable plan marker")
     if args.launch:
         supplied = {
             "profile": args.profile,
