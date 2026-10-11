@@ -42,6 +42,30 @@ R2 ran seven 512×512 generations on three development products (3 base, 3 saved
 
 Raj selected the original model in all three cases (Barilla A, Kinder Bueno B, Cruesli A). This records overall preference only; geometry, label correctness and background ratings remain pending. Synthetic pixel-error gains did not translate into adapter preference here; three cases do not establish a broad ranking.
 
+## Scene-data checks
+
+The checker is in the [signed source commit](https://github.com/1337mus/scenetune/commit/ed9e7f73f18d82874e2b7ae80c2a1722b0d22f98); [exact CI run 38110439968, attempt 1](https://github.com/1337mus/scenetune/actions/runs/38110439968) passed on it.
+
+The checker compares recorded product shape, label and font, camera, lighting, materials and render settings. Only wall color may change. It checks the captured records, not whether every scene setting was captured.
+
+| Check | Result |
+| --- | --- |
+| Project tests | 230 passed |
+| New scene tests | 87 passed |
+| Code checks | lint, format, types passed |
+| R4 | Failed before images: Blender Vector type stopped capture. |
+| R5 probe | Failed before snapshots or images: the Render Layers current-scene link was rejected. |
+| R6 probe | Passed with 4 snapshots and 0 images. |
+| R6 preview | Failed after 1 image: recorded scene fields no longer matched. |
+| R7 probe | Passed with 4 snapshots and 0 images. |
+| R7 preview | Passed: 4 CPU images in 55.0 s total, 2 threads, 96 samples. |
+
+R4, R5, and R6 preview evidence was saved. Their processes stopped and mounts were detached. There were no GPU runs or training updates.
+
+R7 passed the strict checks, but did not explain the earlier R6 failure or prove a general fix. We saw stable box and label positions, visible wall shades, grain, and low contrast. This preview does not approve image quality or data use.
+
+Next is varied development-scene work. [Full results and contact sheet](docs/controlled-studio-preview-2026-10-10.md).
+
 ## What we built
 
 - A paired dataset with source images, target images and product masks.
