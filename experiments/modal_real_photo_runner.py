@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,7 @@ APP_NAME = "product-scene-editor-real-photo-inference"
 ATTEMPT_NAME = "real-photo-modal-attempt.json"
 FAILURE_NAME = "real-photo-modal-failure-receipt.json"
 SHUTDOWN_FAILURE_NAME = "real-photo-modal-shutdown-failure-receipt.json"
+SHUTDOWN_OBSERVATION_NAME = "real-photo-modal-shutdown-observation.json"
 RECOVERY_FAILURE_NAME = "real-photo-modal-recovery-failure-receipt.json"
 UNVERIFIED_NAME = "real-photo-unverified-result.bin"
 REMOTE_STARTUP_TIMEOUT_SECONDS = 300
@@ -38,7 +40,6 @@ CONTEXT = {
 }
 _build_image = modal_pilot._build_image
 _app_list_confirms_stopped = modal_matched_study._app_list_confirms_stopped
-_stop_detached_app = modal_matched_study._stop_detached_app
 
 
 @dataclass(frozen=True)
@@ -373,33 +374,111 @@ def _reserve_attempt(plan: RealPhotoPlan, source_commit: str, context: dict[str,
     return path
 
 
-def _confirm_app_stopped(app_id: str, context: dict[str, str]) -> None:
+def _write_shutdown_observation(output_dir: Path, evidence: dict[str, Any]) -> Path:
+    base = output_dir / SHUTDOWN_OBSERVATION_NAME
+    for index in range(1, 1001):
+        path = base if index == 1 else base.with_name(f"{base.stem}-{index:02d}{base.suffix}")
+        try:
+            _write_once(path, evidence)
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError("real-photo shutdown observation evidence limit reached")
+
+
+def _stop_and_confirm(app_id: str, *, context: dict[str, str], output_dir: Path) -> Path:
     environment = dict(os.environ)
     environment["MODAL_PROFILE"] = context["profile"]
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "modal",
-            "app",
-            "list",
-            "--json",
-            "--env",
-            context["environment"],
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-        env=environment,
-    )
-    if completed.returncode != 0 or not _app_list_confirms_stopped(completed.stdout, app_id):
-        raise RuntimeError("Modal did not confirm the app is stopped with zero tasks")
+    evidence: dict[str, Any] = {
+        "schema_version": 1,
+        "app_id": app_id,
+        "stop": {"returncode": None},
+        "observations": [],
+        "status": "unconfirmed",
+    }
+    try:
+        stopped = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "modal",
+                "app",
+                "stop",
+                "--yes",
+                "--env",
+                context["environment"],
+                app_id,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=environment,
+        )
+    except Exception as exc:
+        evidence["stop"]["error_type"] = type(exc).__name__
+        evidence["stop"]["error"] = remote.sanitize_failure(exc)
+    else:
+        evidence["stop"]["returncode"] = stopped.returncode
+        if stopped.returncode != 0:
+            evidence["stop"]["error"] = "Modal app stop command returned nonzero"
 
+    confirmed_stopped = False
+    for attempt in range(1, 7):
+        observation: dict[str, Any] = {
+            "attempt": attempt,
+            "returncode": None,
+            "app_list_json": None,
+        }
+        try:
+            listed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "modal",
+                    "app",
+                    "list",
+                    "--json",
+                    "--env",
+                    context["environment"],
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+                env=environment,
+            )
+        except Exception as exc:
+            observation["error_type"] = type(exc).__name__
+            observation["error"] = remote.sanitize_failure(exc)
+        else:
+            observation["returncode"] = listed.returncode
+            try:
+                json.loads(listed.stdout)
+            except (json.JSONDecodeError, TypeError):
+                observation["error"] = "Modal app list returned malformed JSON"
+            else:
+                observation["app_list_json"] = listed.stdout
+                if listed.returncode != 0:
+                    observation["error"] = "Modal app list command returned nonzero"
+                elif _app_list_confirms_stopped(listed.stdout, app_id):
+                    confirmed_stopped = True
+                else:
+                    observation["error"] = (
+                        "Modal app list did not confirm app stopped with zero tasks"
+                    )
+        evidence["observations"].append(observation)
+        if confirmed_stopped:
+            break
+        if attempt < 6:
+            time.sleep(2)
 
-def _stop_and_confirm(app_id: str, context: dict[str, str]) -> None:
-    _stop_detached_app(app_id, context=context)
-    _confirm_app_stopped(app_id, context)
+    evidence["status"] = "stopped" if confirmed_stopped else "unconfirmed"
+    evidence["observed_at_utc"] = datetime.now(UTC).isoformat()
+    observation_path = _write_shutdown_observation(output_dir, evidence)
+    if not confirmed_stopped:
+        raise RuntimeError("Modal did not confirm app stopped with zero tasks")
+    return observation_path
 
 
 def _is_function_timeout(error: BaseException, modal_module: Any | None) -> bool:
@@ -666,7 +745,7 @@ def _launch(
         )
     if app_id is not None and not observation_unknown:
         try:
-            _stop_and_confirm(app_id, context=context)
+            _stop_and_confirm(app_id, context=context, output_dir=plan.output_dir)
         except Exception as exc:
             _record_shutdown_failure(plan, attempt_path, exc, app_id=app_id, call_id=call_id)
             return 1
@@ -727,7 +806,7 @@ def _recover(plan: RealPhotoPlan, *, context: dict[str, str]) -> int:
         if importlib.metadata.version("modal") != "1.6.1":
             raise RuntimeError("Modal SDK 1.6.1 is required")
         try:
-            _stop_and_confirm(marker["app_id"], context=context)
+            _stop_and_confirm(marker["app_id"], context=context, output_dir=plan.output_dir)
         except Exception as exc:
             _record_shutdown_failure(
                 plan, _attempt_path(plan), exc, app_id=marker["app_id"], call_id=marker["call_id"]
@@ -750,7 +829,7 @@ def _recover(plan: RealPhotoPlan, *, context: dict[str, str]) -> int:
         if importlib.metadata.version("modal") != "1.6.1":
             raise RuntimeError("Modal SDK 1.6.1 is required")
         try:
-            _stop_and_confirm(marker["app_id"], context=context)
+            _stop_and_confirm(marker["app_id"], context=context, output_dir=plan.output_dir)
         except Exception as exc:
             _record_shutdown_failure(
                 plan,
@@ -832,7 +911,7 @@ def _recover(plan: RealPhotoPlan, *, context: dict[str, str]) -> int:
     if recovery_observation_unknown:
         return result_status
     try:
-        _stop_and_confirm(app_id, context=context)
+        _stop_and_confirm(app_id, context=context, output_dir=plan.output_dir)
     except Exception as exc:
         _record_shutdown_failure(plan, _attempt_path(plan), exc, app_id=app_id, call_id=call_id)
         return 1

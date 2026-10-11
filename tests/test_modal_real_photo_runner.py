@@ -25,6 +25,164 @@ def test_stopped_app_requires_strict_identity_and_zero_tasks() -> None:
     assert not runner._app_list_confirms_stopped("[]", "ap-123")
 
 
+def _app_record(app_id: str = "ap-123", state: str = "stopped", tasks: str = "0"):
+    return {
+        "app_id": app_id,
+        "description": "real-photo",
+        "state": state,
+        "tasks": tasks,
+        "created_at": None,
+        "stopped_at": None,
+    }
+
+
+def _completed(returncode: int, stdout: str = ""):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+
+def test_bounded_shutdown_waits_for_stopped_and_records_both_observations(
+    tmp_path, monkeypatch
+) -> None:
+    import sys
+    import time
+
+    context = {"profile": "personal-profile", "workspace": "personal", "environment": "main"}
+    stopping = json.dumps([_app_record(state="stopping")])
+    stopped = json.dumps([_app_record()])
+    results = [_completed(0), _completed(0, stopping), _completed(0, stopped)]
+    calls = []
+    sleeps = []
+
+    def run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return results.pop(0)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+
+    runner._stop_and_confirm("ap-123", context=context, output_dir=tmp_path)
+
+    assert len(calls) == 3
+    assert calls[0][0] == [
+        sys.executable,
+        "-m",
+        "modal",
+        "app",
+        "stop",
+        "--yes",
+        "--env",
+        "main",
+        "ap-123",
+    ]
+    assert calls[0][1]["timeout"] == 30
+    assert calls[0][1]["env"]["MODAL_PROFILE"] == "personal-profile"
+    assert calls[1][0][3:6] == ["app", "list", "--json"]
+    assert calls[1][1]["timeout"] == calls[2][1]["timeout"] == 10
+    assert calls[1][1]["env"]["MODAL_PROFILE"] == "personal-profile"
+    assert [call[0][5] for call in calls[1:]] == ["--json", "--json"]
+    assert sleeps == [2]
+
+    evidence = json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())
+    assert evidence["app_id"] == "ap-123"
+    assert evidence["status"] == "stopped"
+    assert evidence["stop"]["returncode"] == 0
+    assert [item["app_list_json"] for item in evidence["observations"]] == [stopping, stopped]
+    assert not any(key in evidence for key in ("token", "secret", "password"))
+
+
+def test_bounded_shutdown_accepts_nonzero_stop_when_later_observation_confirms_closed(
+    tmp_path, monkeypatch
+) -> None:
+    context = {"profile": "personal-profile", "workspace": "personal", "environment": "main"}
+    responses = [_completed(7), _completed(0, json.dumps([_app_record()]))]
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        return responses.pop(0)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    runner._stop_and_confirm("ap-123", context=context, output_dir=tmp_path)
+    evidence = json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())
+    assert sum("stop" in arguments for arguments in calls) == 1
+    assert evidence["stop"]["returncode"] == 7
+    assert evidence["status"] == "stopped"
+
+
+@pytest.mark.parametrize(
+    "apps",
+    [
+        [],
+        [_app_record(app_id="ap-other")],
+        [_app_record(tasks="1")],
+    ],
+    ids=["absent-app", "wrong-app", "positive-tasks"],
+)
+def test_bounded_shutdown_never_closes_without_exact_stopped_zero_task_app(
+    tmp_path, monkeypatch, apps
+) -> None:
+    import time
+
+    context = {"profile": "personal-profile", "workspace": "personal", "environment": "main"}
+    calls = []
+    sleeps = []
+
+    def run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return _completed(0) if len(calls) == 1 else _completed(0, json.dumps(apps))
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="stopped with zero tasks"):
+        runner._stop_and_confirm("ap-123", context=context, output_dir=tmp_path)
+
+    evidence = json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())
+    assert len(calls) == 7
+    assert len(evidence["observations"]) == 6
+    assert evidence["status"] == "unconfirmed"
+    assert sleeps == [2, 2, 2, 2, 2]
+    assert all(item["app_list_json"] == json.dumps(apps) for item in evidence["observations"])
+
+
+def test_bounded_shutdown_preserves_timeout_and_malformed_observation_diagnostics(
+    tmp_path, monkeypatch
+) -> None:
+    import subprocess
+    import time
+
+    context = {"profile": "personal-profile", "workspace": "personal", "environment": "main"}
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        if len(calls) in {1, 2}:
+            raise subprocess.TimeoutExpired(
+                arguments, timeout=kwargs["timeout"], output="secret=do-not-save"
+            )
+        if len(calls) == 3:
+            return _completed(0, "not-json")
+        return _completed(0, json.dumps([_app_record()]))
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    runner._stop_and_confirm("ap-123", context=context, output_dir=tmp_path)
+
+    evidence = json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())
+    assert evidence["status"] == "stopped"
+    assert evidence["stop"]["returncode"] is None
+    assert evidence["stop"]["error_type"] == "TimeoutExpired"
+    assert evidence["observations"][0]["returncode"] is None
+    assert evidence["observations"][0]["error_type"] == "TimeoutExpired"
+    assert evidence["observations"][0]["app_list_json"] is None
+    assert evidence["observations"][1]["app_list_json"] is None
+    assert evidence["observations"][1]["error"] == "Modal app list returned malformed JSON"
+    assert "secret=do-not-save" not in (tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text()
+
+
 def test_attempt_update_preserves_modal_ids_and_never_allows_a_second_call(
     tmp_path,
 ) -> None:
@@ -136,6 +294,7 @@ def test_unknown_launch_observation_preserves_ids_and_leaves_shutdown_pending(
     assert marker["app_id"] == "ap-original"
     assert marker["call_id"] == "fc-original"
     assert marker["shutdown_status"] == "pending"
+    assert not (tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).exists()
     assert failure["worker_failure_confirmed"] is False
     assert spawned == [1]
     assert stopped == []
@@ -224,7 +383,7 @@ def test_recovery_timeout_preserves_original_unknown_receipt(tmp_path, monkeypat
     )
     runner._write_once(tmp_path / runner.FAILURE_NAME, original)
     original_bytes = (tmp_path / runner.FAILURE_NAME).read_bytes()
-    stopped = []
+    shutdown_commands = []
 
     class Call:
         @staticmethod
@@ -240,9 +399,14 @@ def test_recovery_timeout_preserves_original_unknown_receipt(tmp_path, monkeypat
     monkeypatch.setattr(runner.importlib.metadata, "version", lambda _name: "1.6.1")
     monkeypatch.setattr(runner.remote, "validate_launch_environment", lambda _context: None)
     monkeypatch.setattr(runner.remote, "verify_modal_identity", lambda **_context: None)
-    monkeypatch.setattr(
-        runner, "_stop_and_confirm", lambda app_id, **_kwargs: stopped.append(app_id)
-    )
+
+    def shutdown_run(arguments, **kwargs):
+        shutdown_commands.append((arguments, kwargs))
+        if "stop" in arguments:
+            return _completed(0)
+        return _completed(0, json.dumps([_app_record(app_id="ap-original")]))
+
+    monkeypatch.setattr(runner.subprocess, "run", shutdown_run)
 
     assert runner._recover(plan, context=context) == 1
     marker = json.loads(attempt_path.read_text())
@@ -253,7 +417,10 @@ def test_recovery_timeout_preserves_original_unknown_receipt(tmp_path, monkeypat
     assert marker["worker_status"] == "failed"
     assert marker["worker_failure_confirmed"] is True
     assert marker["shutdown_status"] == "stopped"
-    assert stopped == ["ap-original"]
+    assert len(shutdown_commands) == 2
+    assert json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())["status"] == (
+        "stopped"
+    )
 
 
 @pytest.mark.parametrize(
@@ -447,6 +614,7 @@ def test_ambiguous_spawn_preserves_unknown_work(tmp_path, monkeypatch) -> None:
     assert marker["call_id"] is None
     assert stopped == []
     assert looked_up == []
+    assert not (tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).exists()
 
 
 def test_non_byte_result_is_recorded_and_shutdown_is_confirmed(tmp_path, monkeypatch) -> None:
@@ -455,7 +623,7 @@ def test_non_byte_result_is_recorded_and_shutdown_is_confirmed(tmp_path, monkeyp
 
     plan = _fixture_plan(tmp_path)
     context = dict(runner.CONTEXT)
-    stopped = []
+    shutdown_commands = []
 
     class FakeCall:
         object_id = "fc-nonbyte"
@@ -495,9 +663,14 @@ def test_non_byte_result_is_recorded_and_shutdown_is_confirmed(tmp_path, monkeyp
     )
     monkeypatch.setattr(runner.remote, "validate_launch_environment", lambda _context: None)
     monkeypatch.setattr(runner.remote, "verify_modal_identity", lambda **_context: None)
-    monkeypatch.setattr(
-        runner, "_stop_and_confirm", lambda app_id, **_kwargs: stopped.append(app_id)
-    )
+
+    def shutdown_run(arguments, **kwargs):
+        shutdown_commands.append((arguments, kwargs))
+        if "stop" in arguments:
+            return _completed(0)
+        return _completed(0, json.dumps([_app_record(app_id="ap-nonbyte")]))
+
+    monkeypatch.setattr(runner.subprocess, "run", shutdown_run)
 
     assert (
         runner._launch(
@@ -513,7 +686,10 @@ def test_non_byte_result_is_recorded_and_shutdown_is_confirmed(tmp_path, monkeyp
     assert failure["worker_failure_confirmed"] is False
     assert failure["failure"]["stage"] == "result_validation"
     assert marker["shutdown_status"] == "stopped"
-    assert stopped == ["ap-nonbyte"]
+    assert len(shutdown_commands) == 2
+    evidence = json.loads((tmp_path / runner.SHUTDOWN_OBSERVATION_NAME).read_text())
+    assert evidence["app_id"] == "ap-nonbyte"
+    assert evidence["status"] == "stopped"
 
 
 def test_app_id_survives_app_run_context_startup_error(tmp_path, monkeypatch) -> None:
