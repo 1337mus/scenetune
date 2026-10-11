@@ -14,9 +14,19 @@ R2 compared three development-only product cases using seven 512×512 generation
 
 ## What we can say
 
-Assistant visual observations, not human ratings: both approaches produced kitchen scenes with recognizable products. Some package position or size changes appeared; adapter backgrounds looked smoother and less textured than base in these three cases. Source review covers seven word boxes across the cases and the first two package outlines. Cruesli is a cropped front; exclude whole-package shape and masked-pixel scoring.
+Assistant visual observations: both approaches produced kitchen scenes with recognizable products. Some package position or size changes appeared; adapter backgrounds looked smoother and less textured than base in these three cases. Source review covers seven word boxes across the cases and the first two package outlines. Cruesli is a cropped front; exclude whole-package shape and masked-pixel scoring.
 
-Output geometry review, label transcripts and background ratings remain pending. These are development cases, not a quality benchmark. No pixel-quality score, label percentage, combined score or broad superiority claim is made.
+### Overall visual preference
+
+Raj preferred the original model in all three development cases: 3/3 for the base model, 0/3 for the trained adapter, and 0 ties (one reviewer).
+
+| Product | Raj’s choice | Model selected by frozen key |
+|---|---|---|
+| Barilla | A | Base (original model) |
+| Kinder Bueno | B | Base (original model) |
+| Quaker Cruesli | A | Base (original model) |
+
+Output geometry review, label transcripts and correctness, and background-rubric ratings remain pending. The synthetic study’s pixel-error improvements did not translate into preference for the trained-adapter edits in these three real-photo cases. This small preference result is not a broad ranking; no pixel-quality score, label percentage or combined score is claimed.
 
 ## Cost
 
@@ -24,4 +34,4 @@ At 2026-10-11 00:18:41 UTC, the delayed shared workspace meter showed $5.46 gros
 
 ## Next
 
-Review output geometry and human ratings, then choose a data direction before further training. Keep these three development products out of training and final testing.
+Improve realistic training targets before another training run. Keep the Barilla, Kinder Bueno and Quaker Cruesli product families out of training and final testing; output geometry, label and background evaluations remain pending.
