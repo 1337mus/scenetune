@@ -56,6 +56,52 @@ def test_successful_result_must_contain_exact_29_file_contract() -> None:
         modal_matched_study._validate_result_bundle(missing_one.getvalue(), plan)
 
 
+def test_controlled3d_result_receipt_must_bind_every_plan_digest() -> None:
+    plan = SimpleNamespace(
+        run_id="controlled3d-run",
+        development_pair_ids=tuple(f"dev-{index}" for index in range(9)),
+        source_dataset_manifest_sha256="1" * 64,
+        source_registry_sha256="2" * 64,
+        validation_proof_sha256="3" * 64,
+        train_export_completion_sha256="4" * 64,
+    )
+    receipt = {
+        "run_id": plan.run_id,
+        "study_type": "controlled3d144",
+        "status": "passed",
+        "training": {"source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256},
+        "controlled3d_provenance": {
+            "source_registry_sha256": plan.source_registry_sha256,
+            "validation_proof_sha256": plan.validation_proof_sha256,
+            "train_export_completion_sha256": plan.train_export_completion_sha256,
+        },
+        "metrics_reference": remote.CONTROLLED3D_METRIC_REFERENCE,
+    }
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("receipt.json", json.dumps(receipt))
+        archive.writestr("adapter/step-144.safetensors", b"adapter")
+        for pair_id in plan.development_pair_ids:
+            for mode in ("base", "trained", "reloaded"):
+                archive.writestr(f"images/{pair_id}/{mode}.png", b"image")
+
+    checked, _ = modal_matched_study._validate_result_bundle(
+        bundle.getvalue(), plan, "controlled3d144"
+    )
+    assert checked["controlled3d_provenance"]["validation_proof_sha256"] == "3" * 64
+
+    receipt["controlled3d_provenance"]["validation_proof_sha256"] = "0" * 64
+    altered = io.BytesIO()
+    with zipfile.ZipFile(altered, "w") as archive:
+        archive.writestr("receipt.json", json.dumps(receipt))
+        archive.writestr("adapter/step-144.safetensors", b"adapter")
+        for pair_id in plan.development_pair_ids:
+            for mode in ("base", "trained", "reloaded"):
+                archive.writestr(f"images/{pair_id}/{mode}.png", b"image")
+    with pytest.raises(ValueError, match="provenance|plan"):
+        modal_matched_study._validate_result_bundle(altered.getvalue(), plan, "controlled3d144")
+
+
 def test_attempt_marker_is_separate_and_binds_the_matched_plan(tmp_path: Path) -> None:
     output_dir = tmp_path / "matched-run"
     output_dir.mkdir()
@@ -542,3 +588,22 @@ def test_stop_detached_app_rejects_unconfirmed_list_observations(
     assert list_command[2:5] == ["modal", "app", "list"]
     assert list_kwargs["timeout"] == 30
     assert list_kwargs["env"]["MODAL_PROFILE"] == remote.PROFILE  # type: ignore[index]
+
+
+def test_launcher_exposes_opt_in_controlled3d_study_profile() -> None:
+    args = modal_matched_study._parser().parse_args(["--study-profile", "controlled3d144"])
+    assert args.study_profile == "controlled3d144"
+
+
+def test_remote_worker_dispatches_controlled3d_profile(monkeypatch) -> None:
+    called = []
+    monkeypatch.setattr(
+        remote,
+        "run_remote_controlled3d_study",
+        lambda payload, run_id: called.append((payload, run_id)) or b"controlled3d-result",
+    )
+
+    result = modal_matched_study._remote_worker(b"payload", "controlled3d-run", "controlled3d144")
+
+    assert result == b"controlled3d-result"
+    assert called == [(b"payload", "controlled3d-run")]

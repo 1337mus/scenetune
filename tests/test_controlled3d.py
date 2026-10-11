@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from copy import deepcopy
 from itertools import permutations
 from pathlib import Path
@@ -152,13 +153,16 @@ def _make_case(
     registry_pairs: list[dict[str, Any]] = []
     assignments: list[dict[str, str]] = []
     pairs: list[dict[str, Any]] = []
+    occurrence: Counter[str] = Counter()
     wall_colors = ([0.8, 0.8, 0.8], [0.72, 0.67, 0.57], [0.45, 0.58, 0.42], [0.68, 0.4, 0.32])
     variant_backgrounds = [(220, 220, 220), (238, 225, 205), (105, 140, 105), (175, 105, 80)]
     for split in splits:
-        product_id = f"demo-product-{split}"
-        family_id = f"demo-family-{split}"
-        alias_id = f"demo-family-alias-{split}"
-        pair_id = f"demo-pair-{split}"
+        suffix = f"-{occurrence[split]}" if occurrence[split] else ""
+        occurrence[split] += 1
+        product_id = f"demo-product-{split}{suffix}"
+        family_id = f"demo-family-{split}{suffix}"
+        alias_id = f"demo-family-alias-{split}{suffix}"
+        pair_id = f"demo-pair-{split}{suffix}"
         words = [f"{split.upper()}", "LABEL", "TEST"]
         products.append({"product_id": product_id, "split": split})
         families.append({"canonical_id": family_id, "split": split, "aliases": [alias_id]})
@@ -169,7 +173,7 @@ def _make_case(
             ]
         )
         recipe_raw = f"recipe for {split}".encode()
-        recipe_path = f"{split}/pins/recipe.bin"
+        recipe_path = f"{split}/pins/recipe{suffix}.bin"
         recipe_ref = _write(root, recipe_path, recipe_raw)
         local_pin_refs: dict[str, dict[str, str]] = {}
         for pin in (
@@ -180,7 +184,9 @@ def _make_case(
             "font_file",
             "font_license",
         ):
-            local_pin_refs[pin] = _write(root, f"{split}/pins/{pin}.bin", f"{split} {pin}".encode())
+            local_pin_refs[pin] = _write(
+                root, f"{split}/pins/{pin}{suffix}.bin", f"{split} {pin}{suffix}".encode()
+            )
         studio_source = Path(__file__).parents[1] / "src/product_scene_editor/studio_state.py"
         studio_sha = _digest(studio_source.read_bytes())
         pins = {
@@ -200,7 +206,7 @@ def _make_case(
             "local_files": [
                 {"pin": "recipe_sha256", "path": recipe_path, "sha256": recipe_ref["sha256"]},
                 *[
-                    {"pin": pin, "path": f"{split}/pins/{pin}.bin", **ref}
+                    {"pin": pin, "path": f"{split}/pins/{pin}{suffix}.bin", **ref}
                     for pin, ref in local_pin_refs.items()
                 ],
             ],

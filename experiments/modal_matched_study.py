@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from experiments import modal_pilot
-from product_scene_editor import matched_study, remote
+from product_scene_editor import controlled3d_study, matched_study, remote
 
 APP_NAME = "product-scene-editor-matched-study"
 RESULT_NAME = "matched-study-result.zip"
@@ -36,28 +36,61 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset-dir", type=Path, default=Path("artifacts/pilot-data-2026-10-08-r2")
     )
-    parser.add_argument(
-        "--plan-dir", type=Path, default=Path(f"artifacts/matched-studies/{DEFAULT_RUN_ID}")
-    )
+    parser.add_argument("--plan-dir", type=Path)
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
+    parser.add_argument(
+        "--study-profile", choices=("matched144", "controlled3d144"), default="matched144"
+    )
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--registry", type=Path)
+    parser.add_argument("--train-export-dir", type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--launch", action="store_true", help="run one explicitly cleared study")
     mode.add_argument("--recover", action="store_true", help="observe only the recorded Modal call")
-    parser.add_argument(
-        "--clearance",
-        type=Path,
-        default=Path(".context/matched-study-launch-clearance.json"),
-    )
+    parser.add_argument("--clearance", type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--workspace")
     parser.add_argument("--environment")
     return parser
 
 
-def _remote_worker(payload: bytes, run_id: str) -> bytes:
-    from product_scene_editor.remote import run_remote_matched_study
+def _remote_worker(payload: bytes, run_id: str, study_profile: str = "matched144") -> bytes:
+    if study_profile == "controlled3d144":
+        return remote.run_remote_controlled3d_study(payload, run_id)
+    if study_profile != "matched144":
+        raise ValueError("unknown study profile")
+    return remote.run_remote_matched_study(payload, run_id)
 
-    return run_remote_matched_study(payload, run_id)
+
+def _study_spec(study_profile: str) -> tuple[Any, str, int, int]:
+    if study_profile == "controlled3d144":
+        return controlled3d_study, "controlled3d144", 18, 9
+    if study_profile == "matched144":
+        return (
+            matched_study,
+            "matched144",
+            matched_study.TRAINING_PAIR_COUNT,
+            matched_study.DEVELOPMENT_PAIR_COUNT,
+        )
+    raise ValueError("unknown study profile")
+
+
+def _plan_binding(plan: Any, study_profile: str) -> dict[str, Any]:
+    spec, study_type, _train_count, _dev_count = _study_spec(study_profile)
+    marker = plan.output_dir / spec.RUN_MARKER_NAME
+    fields = {
+        "study_type": study_type,
+        "source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256,
+        "training_pair_ids": list(plan.training_pair_ids),
+        "development_pair_ids": list(plan.development_pair_ids),
+    }
+    if study_profile == "controlled3d144":
+        fields.update(
+            source_registry_sha256=plan.source_registry_sha256,
+            validation_proof_sha256=plan.validation_proof_sha256,
+            train_export_completion_sha256=plan.train_export_completion_sha256,
+        )
+    return {"plan_marker_path": marker, **fields}
 
 
 def _reserve_attempt_marker(
@@ -66,9 +99,11 @@ def _reserve_attempt_marker(
     *,
     source_commit: str,
     context: dict[str, str],
+    study_profile: str = "matched144",
 ) -> dict[str, Any]:
+    binding = _plan_binding(plan, study_profile)
     payload = plan.payload_path.read_bytes()
-    plan_marker = (plan.output_dir / matched_study.RUN_MARKER_NAME).read_bytes()
+    plan_marker = binding["plan_marker_path"].read_bytes()
     payload_sha256 = hashlib.sha256(payload).hexdigest()
     if payload_sha256 != plan.payload_sha256 or len(payload) != plan.payload_bytes:
         raise ValueError("matched-study payload changed before attempt reservation")
@@ -83,14 +118,11 @@ def _reserve_attempt_marker(
     marker = {
         "schema_version": 1,
         "run_id": plan.run_id,
-        "study_type": "matched144",
+        **{key: value for key, value in binding.items() if key != "plan_marker_path"},
         "status": "reserved",
         "source_commit": source_commit,
         "payload_sha256": payload_sha256,
         "plan_sha256": hashlib.sha256(plan_marker).hexdigest(),
-        "source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256,
-        "training_pair_ids": list(plan.training_pair_ids),
-        "development_pair_ids": list(plan.development_pair_ids),
         "gpu": "A100-80GB",
         "gpu_count": 1,
         "cores": 4,
@@ -150,38 +182,39 @@ def _run_local_git(project_root: Path, arguments: list[str]) -> subprocess.Compl
 
 
 def _validate_launch_clearance(
-    plan: matched_study.MatchedStudyPlan,
+    plan: Any,
     *,
     project_root: Path,
     clearance_path: Path,
     context: dict[str, str],
     now: datetime | None = None,
+    study_profile: str = "matched144",
 ) -> dict[str, Any]:
     if clearance_path.is_symlink() or not clearance_path.is_file():
         raise ValueError("matched-study launch clearance is missing or unsafe")
     try:
         clearance = json.loads(clearance_path.read_text(encoding="utf-8"))
         payload = plan.payload_path.read_bytes()
-        plan_marker_path = plan.output_dir / matched_study.RUN_MARKER_NAME
+        binding = _plan_binding(plan, study_profile)
+        plan_marker_path = binding["plan_marker_path"]
         plan_marker = plan_marker_path.read_bytes()
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("matched-study clearance or bound plan is missing or invalid") from exc
     if not isinstance(clearance, dict):
         raise ValueError("matched-study launch clearance must be a JSON object")
+    spec, study_type, train_count, dev_count = _study_spec(study_profile)
+    binding = _plan_binding(plan, study_profile)
     expected = {
         "schema_version": 1,
         "run_id": plan.run_id,
-        "study_type": "matched144",
+        **{key: value for key, value in binding.items() if key != "plan_marker_path"},
         "status": "approved",
         "review_status": "approved",
         "ci_status": "success",
         "payload_sha256": plan.payload_sha256,
         "plan_sha256": hashlib.sha256(plan_marker).hexdigest(),
-        "source_dataset_manifest_sha256": matched_study.APPROVED_DATASET_MANIFEST_SHA256,
-        "training_pair_ids": list(plan.training_pair_ids),
-        "development_pair_ids": list(plan.development_pair_ids),
-        "training_pairs": matched_study.TRAINING_PAIR_COUNT,
-        "development_pairs": matched_study.DEVELOPMENT_PAIR_COUNT,
+        "training_pairs": train_count,
+        "development_pairs": dev_count,
         "epochs": matched_study.TRAINING_EPOCHS,
         "training_steps": matched_study.TRAINING_STEPS,
         "allowance_usd": 15,
@@ -195,12 +228,19 @@ def _validate_launch_clearance(
         "retries": 0,
         **context,
     }
+    pinned_manifest = (
+        matched_study.APPROVED_DATASET_MANIFEST_SHA256
+        if study_profile == "matched144"
+        else controlled3d_study.APPROVED_CONTROLLED3D_MANIFEST_SHA256
+    )
+    pinned_registry = controlled3d_study.APPROVED_CONTROLLED3D_REGISTRY_SHA256
     if (
         hashlib.sha256(payload).hexdigest() != plan.payload_sha256
         or len(payload) != plan.payload_bytes
         or plan.payload_path.is_symlink()
         or plan_marker_path.is_symlink()
-        or plan.source_dataset_manifest_sha256 != matched_study.APPROVED_DATASET_MANIFEST_SHA256
+        or plan.source_dataset_manifest_sha256 != pinned_manifest
+        or (study_profile == "controlled3d144" and plan.source_registry_sha256 != pinned_registry)
         or context
         != {
             "profile": remote.PROFILE,
@@ -246,11 +286,12 @@ def _failure_receipt(
     app_id: str | None = None,
     call_id: str | None = None,
     status: str = "observation_unknown",
+    study_profile: str = "matched144",
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "run_id": run_id,
-        "study_type": "matched144",
+        "study_type": _study_spec(study_profile)[1],
         "status": status,
         "failure": {
             "stage": stage,
@@ -274,24 +315,23 @@ def _validate_attempt_binding(
     plan: matched_study.MatchedStudyPlan,
     attempt_path: Path,
     context: dict[str, str],
+    study_profile: str = "matched144",
 ) -> dict[str, Any]:
     if attempt_path.is_symlink() or not attempt_path.is_file():
         raise ValueError("matched-study attempt marker is missing or unsafe")
     try:
         marker = json.loads(attempt_path.read_text(encoding="utf-8"))
         payload = plan.payload_path.read_bytes()
-        plan_marker = (plan.output_dir / matched_study.RUN_MARKER_NAME).read_bytes()
+        binding = _plan_binding(plan, study_profile)
+        plan_marker = binding["plan_marker_path"].read_bytes()
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("matched-study attempt or plan is missing or invalid") from exc
     expected = {
         "schema_version": 1,
         "run_id": plan.run_id,
-        "study_type": "matched144",
+        **{key: value for key, value in binding.items() if key != "plan_marker_path"},
         "payload_sha256": plan.payload_sha256,
         "plan_sha256": hashlib.sha256(plan_marker).hexdigest(),
-        "source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256,
-        "training_pair_ids": list(plan.training_pair_ids),
-        "development_pair_ids": list(plan.development_pair_ids),
         "gpu": "A100-80GB",
         "gpu_count": 1,
         "cores": 4,
@@ -332,7 +372,7 @@ def _validate_attempt_binding(
         or hashlib.sha256(payload).hexdigest() != plan.payload_sha256
         or len(payload) != plan.payload_bytes
         or plan.payload_path.is_symlink()
-        or (plan.output_dir / matched_study.RUN_MARKER_NAME).is_symlink()
+        or binding["plan_marker_path"].is_symlink()
         or not isinstance(marker.get("source_commit"), str)
         or not re.fullmatch(r"[0-9a-f]{40}", marker["source_commit"])
         or not isinstance(marker.get("call_id"), str)
@@ -367,9 +407,7 @@ def _write_failure_once(path: Path, receipt: dict[str, Any]) -> None:
         _write_json_once(path, receipt)
 
 
-def _preserve_unverified_result(
-    plan: matched_study.MatchedStudyPlan, data: object
-) -> dict[str, Any] | None:
+def _preserve_unverified_result(plan: Any, data: object) -> dict[str, Any] | None:
     if not isinstance(data, bytes) or not data or len(data) > remote.MAX_RESULT_BYTES:
         return None
     path = plan.output_dir / UNVERIFIED_RESULT_NAME
@@ -391,6 +429,7 @@ def _record_result_validation_failure(
     *,
     app_id: str,
     call_id: str,
+    study_profile: str = "matched144",
 ) -> None:
     failure = _failure_receipt(
         plan.run_id,
@@ -399,6 +438,7 @@ def _record_result_validation_failure(
         app_id=app_id,
         call_id=call_id,
         status="modal_error",
+        study_profile=study_profile,
     )
     updates: dict[str, Any] = {
         "status": "modal_error",
@@ -510,6 +550,7 @@ def _record_shutdown_failure(
     *,
     app_id: str,
     call_id: str,
+    study_profile: str = "matched144",
 ) -> None:
     failure = _failure_receipt(
         plan.run_id,
@@ -518,6 +559,7 @@ def _record_shutdown_failure(
         app_id=app_id,
         call_id=call_id,
         status="shutdown_error",
+        study_profile=study_profile,
     )
     _update_attempt_marker(
         attempt_path,
@@ -530,9 +572,10 @@ def _record_shutdown_failure(
 
 
 def _recover(
-    plan: matched_study.MatchedStudyPlan,
+    plan: Any,
     *,
     context: dict[str, str],
+    study_profile: str = "matched144",
 ) -> int:
     """Poll only the call ID recorded by the original launch; never create a new call."""
     result_path = plan.output_dir / RESULT_NAME
@@ -540,7 +583,7 @@ def _recover(
     attempt_path = plan.output_dir / ATTEMPT_MARKER_NAME
     if result_path.exists() or result_path.is_symlink():
         raise FileExistsError("matched-study result already exists; refusing to overwrite it")
-    marker = _validate_attempt_binding(plan, attempt_path, context)
+    marker = _validate_attempt_binding(plan, attempt_path, context, study_profile)
     remote.validate_launch_environment(context)
     remote.verify_modal_identity(**context)
     os.environ["MODAL_PROFILE"] = context["profile"]
@@ -559,6 +602,7 @@ def _recover(
             exc,
             app_id=app_id,
             call_id=call_id,
+            study_profile=study_profile,
         )
         _update_attempt_marker(
             attempt_path,
@@ -572,7 +616,7 @@ def _recover(
         return 1
     result_status = 1
     try:
-        receipt, _names = _validate_result_bundle(result_bytes, plan)
+        receipt, _names = _validate_result_bundle(result_bytes, plan, study_profile)
         with result_path.open("xb") as stream:
             stream.write(result_bytes)
     except Exception as exc:
@@ -584,6 +628,7 @@ def _recover(
             exc,
             app_id=app_id,
             call_id=call_id,
+            study_profile=study_profile,
         )
     else:
         _update_attempt_marker(
@@ -603,7 +648,13 @@ def _recover(
         _stop_detached_app(app_id, context=context)
     except Exception as exc:
         _record_shutdown_failure(
-            plan, attempt_path, failure_path, exc, app_id=app_id, call_id=call_id
+            plan,
+            attempt_path,
+            failure_path,
+            exc,
+            app_id=app_id,
+            call_id=call_id,
+            study_profile=study_profile,
         )
         print(
             json.dumps(
@@ -614,6 +665,7 @@ def _recover(
                     app_id=app_id,
                     call_id=call_id,
                     status="shutdown_error",
+                    study_profile=study_profile,
                 ),
                 sort_keys=True,
             )
@@ -628,11 +680,12 @@ def _recover(
 
 
 def _launch(
-    plan: matched_study.MatchedStudyPlan,
+    plan: Any,
     *,
     context: dict[str, str],
     project_root: Path | None = None,
     clearance_path: Path | None = None,
+    study_profile: str = "matched144",
 ) -> int:
     result_path = plan.output_dir / RESULT_NAME
     failure_path = plan.output_dir / MODAL_FAILURE_NAME
@@ -643,21 +696,44 @@ def _launch(
         raise FileExistsError(
             "matched-study output already has a result, failure, or attempt marker"
         )
-    payload = matched_study.read_matched_study_payload(plan)
+    train_count, dev_count = _study_spec(study_profile)[2:]
+    payload: Any
+    if study_profile == "controlled3d144":
+        payload = controlled3d_study.validate_controlled3d_study_payload_bytes(
+            plan.payload_path.read_bytes(), plan.run_id
+        )
+        manifest_pin = controlled3d_study.APPROVED_CONTROLLED3D_MANIFEST_SHA256
+        registry_pin = controlled3d_study.APPROVED_CONTROLLED3D_REGISTRY_SHA256
+        valid = (
+            payload.source_registry_sha256 == registry_pin
+            and payload.validation_proof_sha256 == plan.validation_proof_sha256
+            and payload.train_export_completion_sha256 == plan.train_export_completion_sha256
+        )
+    else:
+        payload = matched_study.read_matched_study_payload(plan)
+        manifest_pin = matched_study.APPROVED_DATASET_MANIFEST_SHA256
+        valid = True
     if (
-        len(payload.train_rows) != matched_study.TRAINING_PAIR_COUNT
-        or len(payload.dev_rows) != matched_study.DEVELOPMENT_PAIR_COUNT
+        len(payload.train_rows) != train_count
+        or len(payload.dev_rows) != dev_count
         or tuple(row["pair_id"] for row in payload.train_rows) != plan.training_pair_ids
         or tuple(row["pair_id"] for row in payload.dev_rows) != plan.development_pair_ids
-        or payload.source_dataset_manifest_sha256 != matched_study.APPROVED_DATASET_MANIFEST_SHA256
+        or payload.source_dataset_manifest_sha256 != manifest_pin
+        or not valid
     ):
-        raise ValueError("matched-study launch requires the exact reviewed train/dev plan")
+        raise ValueError("study launch requires the exact reviewed train/dev plan")
     root = project_root or Path(__file__).resolve().parents[1]
+    default_clearance = (
+        ".context/controlled3d-study-launch-clearance.json"
+        if study_profile == "controlled3d144"
+        else ".context/matched-study-launch-clearance.json"
+    )
     clearance = _validate_launch_clearance(
         plan,
         project_root=root,
-        clearance_path=clearance_path or root / ".context/matched-study-launch-clearance.json",
+        clearance_path=clearance_path or root / default_clearance,
         context=context,
+        study_profile=study_profile,
     )
     remote.validate_launch_environment(context)
     _reserve_attempt_marker(
@@ -665,6 +741,7 @@ def _launch(
         attempt_path,
         source_commit=clearance["source_commit"],
         context=context,
+        study_profile=study_profile,
     )
     phase = "modal_identity"
     app: Any | None = None
@@ -707,7 +784,7 @@ def _launch(
             app_id = app_id_value
             _update_attempt_marker(attempt_path, status="app_started", app_id=app_id)
             phase = "modal_spawn"
-            call = run_once.spawn(plan.payload_path.read_bytes(), plan.run_id)
+            call = run_once.spawn(plan.payload_path.read_bytes(), plan.run_id, study_profile)
             call_id_value = getattr(call, "object_id", None) or getattr(call, "call_id", None)
             if not isinstance(call_id_value, str) or not call_id_value:
                 raise RuntimeError("Modal call did not expose a call ID after spawn")
@@ -733,6 +810,7 @@ def _launch(
             app_id=app_id,
             call_id=call_id,
             status="observation_unknown" if unknown_observation else "modal_error",
+            study_profile=study_profile,
         )
         _update_attempt_marker(
             attempt_path,
@@ -747,7 +825,7 @@ def _launch(
         return 1
     result_status = 1
     try:
-        receipt, _names = _validate_result_bundle(result_bytes, plan)
+        receipt, _names = _validate_result_bundle(result_bytes, plan, study_profile)
         with result_path.open("xb") as stream:
             stream.write(result_bytes)
     except Exception as exc:
@@ -759,6 +837,7 @@ def _launch(
             exc,
             app_id=app_id,
             call_id=call_id,
+            study_profile=study_profile,
         )
     else:
         _update_attempt_marker(
@@ -778,7 +857,13 @@ def _launch(
         _stop_detached_app(app_id, context=context)
     except Exception as exc:
         _record_shutdown_failure(
-            plan, attempt_path, failure_path, exc, app_id=app_id, call_id=call_id
+            plan,
+            attempt_path,
+            failure_path,
+            exc,
+            app_id=app_id,
+            call_id=call_id,
+            study_profile=study_profile,
         )
         print(
             json.dumps(
@@ -789,6 +874,7 @@ def _launch(
                     app_id=app_id,
                     call_id=call_id,
                     status="shutdown_error",
+                    study_profile=study_profile,
                 ),
                 sort_keys=True,
             )
@@ -802,16 +888,24 @@ def _launch(
     return result_status
 
 
-def _load_plan(output_dir: Path) -> matched_study.MatchedStudyPlan:
-    return matched_study.load_matched_study_plan(output_dir)
+def _load_plan(output_dir: Path, study_profile: str = "matched144") -> Any:
+    spec = _study_spec(study_profile)[0]
+    return (
+        spec.load_matched_study_plan(output_dir)
+        if study_profile == "matched144"
+        else spec.load_controlled3d_study_plan(output_dir)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    study_profile = args.study_profile
+    study_dir = "controlled3d-studies" if study_profile == "controlled3d144" else "matched-studies"
+    plan_dir = args.plan_dir or Path(f"artifacts/{study_dir}/{args.run_id}")
     if args.launch or args.recover:
-        plan = _load_plan(args.plan_dir)
+        plan = _load_plan(plan_dir, study_profile)
         if args.run_id != plan.run_id:
-            raise ValueError("--run-id does not match the write-once matched-study plan")
+            raise ValueError("--run-id does not match the write-once study plan")
         context = {
             "profile": args.profile or "",
             "workspace": args.workspace or "",
@@ -821,23 +915,51 @@ def main(argv: list[str] | None = None) -> int:
             mode = "--recover" if args.recover else "--launch"
             raise ValueError(f"{mode} requires explicit --profile, --workspace, and --environment")
         if args.recover:
-            return _recover(plan, context=context)
-        return _launch(plan, context=context, clearance_path=args.clearance)
+            return _recover(plan, context=context, study_profile=study_profile)
+        return _launch(
+            plan,
+            context=context,
+            clearance_path=args.clearance,
+            study_profile=study_profile,
+        )
 
     if not args.dataset_dir.is_dir():
-        raise FileNotFoundError(
-            "the reviewed matched-study dataset must be present before planning"
+        raise FileNotFoundError("the reviewed study dataset must be present before planning")
+    payload: Any
+    if study_profile == "controlled3d144":
+        if args.manifest is None or args.registry is None or args.train_export_dir is None:
+            raise ValueError(
+                "Controlled3D planning requires --manifest, --registry, and --train-export-dir"
+            )
+        plan = controlled3d_study.plan_controlled3d_study(
+            args.dataset_dir,
+            args.manifest,
+            args.registry,
+            args.train_export_dir,
+            plan_dir,
+            run_id=args.run_id,
         )
-    plan = matched_study.plan_matched_study(args.dataset_dir, args.plan_dir, run_id=args.run_id)
-    payload = matched_study.read_matched_study_payload(plan)
+        payload = controlled3d_study.validate_controlled3d_study_payload_bytes(
+            plan.payload_path.read_bytes(), plan.run_id
+        )
+    else:
+        plan = matched_study.plan_matched_study(args.dataset_dir, plan_dir, run_id=args.run_id)
+        payload = matched_study.read_matched_study_payload(plan)
     print(
         json.dumps(
             {
                 "status": "planned",
+                "study_type": _study_spec(study_profile)[1],
                 "run_id": plan.run_id,
                 "plan_dir": str(plan.output_dir),
                 "payload_bytes": plan.payload_bytes,
                 "payload_sha256": plan.payload_sha256,
+                "source_dataset_manifest_sha256": plan.source_dataset_manifest_sha256,
+                "source_registry_sha256": getattr(plan, "source_registry_sha256", None),
+                "validation_proof_sha256": getattr(plan, "validation_proof_sha256", None),
+                "train_export_completion_sha256": getattr(
+                    plan, "train_export_completion_sha256", None
+                ),
                 "training_pairs": len(payload.train_rows),
                 "development_pairs": len(payload.dev_rows),
                 "training_steps": matched_study.TRAINING_STEPS,
@@ -850,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate_result_bundle(
-    data: bytes, plan: matched_study.MatchedStudyPlan
+    data: bytes, plan: Any, study_profile: str = "matched144"
 ) -> tuple[dict[str, Any], set[str]]:
     """Validate a worker archive against the exact plan-specific artifact contract."""
     if not isinstance(data, bytes) or not data or len(data) > remote.MAX_RESULT_BYTES:
@@ -874,10 +996,24 @@ def _validate_result_bundle(
     if (
         not isinstance(receipt, dict)
         or receipt.get("run_id") != plan.run_id
-        or receipt.get("study_type") != "matched144"
+        or receipt.get("study_type") != _study_spec(study_profile)[1]
         or receipt.get("status") not in {"passed", "failed"}
     ):
-        raise ValueError("Modal result receipt does not match this matched-study run")
+        raise ValueError("Modal result receipt does not match this study run")
+    if study_profile == "controlled3d144" and receipt["status"] == "passed":
+        expected_provenance = {
+            "source_registry_sha256": plan.source_registry_sha256,
+            "validation_proof_sha256": plan.validation_proof_sha256,
+            "train_export_completion_sha256": plan.train_export_completion_sha256,
+        }
+        training = receipt.get("training")
+        if (
+            not isinstance(training, dict)
+            or training.get("source_dataset_manifest_sha256") != plan.source_dataset_manifest_sha256
+            or receipt.get("controlled3d_provenance") != expected_provenance
+            or receipt.get("metrics_reference") != remote.CONTROLLED3D_METRIC_REFERENCE
+        ):
+            raise ValueError("Modal Controlled3D receipt provenance does not bind this plan")
     required = {
         "receipt.json",
         "adapter/step-144.safetensors",

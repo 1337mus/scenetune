@@ -106,7 +106,7 @@ class _TrainingProfile:
     dev_pair_count: int
     epochs: int
     updates: int
-    dataset_manifest_sha256: str
+    dataset_manifest_sha256: str | None
 
 
 _PILOT_PROFILE = _TrainingProfile(
@@ -125,6 +125,22 @@ _MATCHED_PROFILE = _TrainingProfile(
     updates=_MATCHED_TRAINING_STEPS,
     dataset_manifest_sha256=_MATCHED_DATASET_MANIFEST_SHA256,
 )
+_CONTROLLED3D_PROFILE = _TrainingProfile(
+    name="controlled3d-study",
+    train_pair_count=18,
+    dev_pair_count=9,
+    epochs=8,
+    updates=_MATCHED_TRAINING_STEPS,
+    dataset_manifest_sha256=None,
+)
+CONTROLLED3D_METRIC_REFERENCE = {
+    "foreground_mean_absolute_error": "source",
+    "target_foreground_mean_absolute_error": "target",
+    "source_to_target_foreground_mean_absolute_error": "source_to_target_baseline",
+    "limitation": (
+        "Pixel metrics measure reference similarity; they do not prove label text or shape quality."
+    ),
+}
 
 
 def _require_training_profile(profile: object) -> _TrainingProfile:
@@ -133,7 +149,9 @@ def _require_training_profile(profile: object) -> _TrainingProfile:
         return _PILOT_PROFILE
     if profile is _MATCHED_PROFILE:
         return _MATCHED_PROFILE
-    raise ValueError("training profile must be one of the two canonical private profiles")
+    if profile is _CONTROLLED3D_PROFILE:
+        return _CONTROLLED3D_PROFILE
+    raise ValueError("training profile must be one of the three canonical private profiles")
 
 
 class _WorkerFailure(Exception):
@@ -408,8 +426,10 @@ def _failure_bundle(
         "progress": failure_progress,
         "recorded_at_utc": datetime.now(UTC).isoformat(),
     }
-    if selected is _MATCHED_PROFILE:
-        receipt["study_type"] = "matched144"
+    if selected is not _PILOT_PROFILE:
+        receipt["study_type"] = (
+            "controlled3d144" if selected is _CONTROLLED3D_PROFILE else "matched144"
+        )
     artifacts = {
         **saved_artifacts,
         "receipt.json": (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode(),
@@ -533,6 +553,38 @@ def _load_matched_payload(
     training_root.mkdir(parents=True, exist_ok=True)
     training_root.joinpath("metadata.json").write_bytes(payload.files["metadata.json"])
     return list(payload.train_rows), list(payload.dev_rows), payload.source_dataset_manifest_sha256
+
+
+def _load_controlled3d_payload(
+    payload_bytes: bytes, run_id: str, work_dir: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, dict[str, str]]:
+    from .controlled3d_study import validate_controlled3d_study_payload_bytes
+
+    payload = validate_controlled3d_study_payload_bytes(payload_bytes, run_id)
+    training_root = work_dir / "training-data"
+    for name, content in payload.files.items():
+        if name in {"metadata.json", "controlled3d_manifest.json"}:
+            continue
+        relative = PurePosixPath(name)
+        if relative.parts[0] not in {"train", "dev"}:
+            raise ValueError("Controlled3D payload contains an unexpected asset path")
+        base = training_root if relative.parts[0] == "train" else work_dir
+        target = base.joinpath(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    training_root.mkdir(parents=True, exist_ok=True)
+    training_root.joinpath("metadata.json").write_bytes(payload.files["metadata.json"])
+    bindings = {
+        "source_registry_sha256": payload.source_registry_sha256,
+        "validation_proof_sha256": payload.validation_proof_sha256,
+        "train_export_completion_sha256": payload.train_export_completion_sha256,
+    }
+    return (
+        list(payload.train_rows),
+        list(payload.dev_rows),
+        payload.source_dataset_manifest_sha256,
+        bindings,
+    )
 
 
 def _component_paths(snapshot_dirs: dict[str, Path]) -> tuple[list[list[str]], str]:
@@ -667,7 +719,11 @@ def _matched_image_name(pair_id: str, mode: str) -> str:
 
 
 def _prepare_matched_development_assets(
-    rows: list[dict[str, Any]], work_root: Path, image_module: Any
+    rows: list[dict[str, Any]],
+    work_root: Path,
+    image_module: Any,
+    *,
+    allow_relighting: bool = False,
 ) -> dict[str, dict[str, Any]]:
     assets: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -683,7 +739,10 @@ def _prepare_matched_development_assets(
             target = opened.convert("RGB")
         with image_module.open(work_root / row["mask"]) as opened:
             mask = opened.convert("L")
-        _validate_matched_foreground_identity(source, target, mask)
+        if allow_relighting:
+            _validate_controlled3d_foreground_inputs(source, target, mask)
+        else:
+            _validate_matched_foreground_identity(source, target, mask)
         assets[pair_id] = {
             "row": row,
             "prompt": row["prompt"],
@@ -735,6 +794,24 @@ def _score_matched_generations(
     return metrics
 
 
+def _score_controlled3d_generations(
+    development_assets: dict[str, dict[str, Any]], generated_by_mode: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    from PIL import ImageChops, ImageStat
+
+    metrics = _score_matched_generations(development_assets, generated_by_mode)
+    for pair_id, assets in development_assets.items():
+        source_target = ImageChops.difference(assets["source"], assets["target"])
+        baseline = sum(ImageStat.Stat(source_target, mask=assets["mask"]).mean) / 3
+        for mode in ("base", "trained", "reloaded"):
+            difference = ImageChops.difference(assets["target"], generated_by_mode[mode][pair_id])
+            metrics[pair_id][mode]["target_foreground_mean_absolute_error"] = (
+                sum(ImageStat.Stat(difference, mask=assets["mask"]).mean) / 3
+            )
+            metrics[pair_id][mode]["source_to_target_foreground_mean_absolute_error"] = baseline
+    return metrics
+
+
 def _generate(pipe: Any, prompt: str, reference: Any, seed: int) -> Any:
     return pipe(
         prompt=prompt,
@@ -778,6 +855,21 @@ def _reload_and_generate(
         del reloaded_pipe, reload_model
         gc.collect()
         torch.cuda.empty_cache()
+
+
+def _validate_controlled3d_foreground_inputs(source: Any, target: Any, mask: Any) -> None:
+    if (
+        getattr(source, "mode", None) != "RGB"
+        or getattr(target, "mode", None) != "RGB"
+        or getattr(mask, "mode", None) != "L"
+        or source.size != (512, 512)
+        or target.size != source.size
+        or mask.size != source.size
+    ):
+        raise ValueError("Controlled3D source, target, and mask must be aligned 512x512 images")
+    histogram = mask.histogram()
+    if any(histogram[1:255]) or not histogram[0] or not histogram[255]:
+        raise ValueError("Controlled3D mask must contain binary foreground and background")
 
 
 def _validate_matched_foreground_identity(source: Any, target: Any, mask: Any) -> None:
@@ -853,12 +945,18 @@ def run_remote_matched_study(payload_bytes: bytes, run_id: str) -> bytes:
     return _run_remote_training(payload_bytes, run_id, _MATCHED_PROFILE)
 
 
+def run_remote_controlled3d_study(payload_bytes: bytes, run_id: str) -> bytes:
+    """Train the fixed Controlled3D 144-update profile against nine held-out edits."""
+    return _run_remote_training(payload_bytes, run_id, _CONTROLLED3D_PROFILE)
+
+
 def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> bytes:
-    """Run one of the two closed training profiles through the shared worker body."""
+    """Run one of the three closed training profiles through the shared worker body."""
     selected = _require_training_profile(profile)
     stage = "input_validation"
     started = time.monotonic()
     work_root: Path | None = None
+    controlled3d_bindings: dict[str, str] = {}
     progress: dict[str, Any] = {
         "optimizer_updates": 0,
         "optimizer_steps_attempted": 0,
@@ -879,12 +977,22 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
                 payload_bytes, run_id, work_root
             )
             dev_rows = [dev_row]
-        else:
+        elif selected is _MATCHED_PROFILE:
             train_rows, dev_rows, source_manifest_sha256 = _load_matched_payload(
                 payload_bytes, run_id, work_root
             )
             dev_row = dev_rows[0]
-        if source_manifest_sha256 != selected.dataset_manifest_sha256:
+        else:
+            (train_rows, dev_rows, source_manifest_sha256, controlled3d_bindings) = (
+                _load_controlled3d_payload(payload_bytes, run_id, work_root)
+            )
+            dev_row = dev_rows[0]
+        expected_manifest = selected.dataset_manifest_sha256
+        if selected is _CONTROLLED3D_PROFILE:
+            from .controlled3d_study import APPROVED_CONTROLLED3D_MANIFEST_SHA256
+
+            expected_manifest = APPROVED_CONTROLLED3D_MANIFEST_SHA256
+        if expected_manifest != source_manifest_sha256:
             raise ValueError(f"{selected.name} data manifest does not match the reviewed dataset")
         _validate_training_profile_contract(
             selected,
@@ -948,7 +1056,12 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
             base_image.save(work_root / "base.png", format="PNG", optimize=True)
             del base_pipe
         else:
-            development_assets = _prepare_matched_development_assets(dev_rows, work_root, Image)
+            development_assets = _prepare_matched_development_assets(
+                dev_rows,
+                work_root,
+                Image,
+                allow_relighting=selected is _CONTROLLED3D_PROFILE,
+            )
             base_pipe = _load_pipe(downloaded, "cuda")
             base_images = _generate_matched_pair_images(
                 base_pipe, development_assets, work_root, "base", 7321, progress
@@ -1228,10 +1341,17 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
                         f"reloaded adapter generation exceeded the explicit pixel tolerance "
                         f"for {pair_id}"
                     )
-            matched_metrics = _score_matched_generations(
-                development_assets,
-                {"base": base_images, "trained": trained_images, "reloaded": reloaded_images},
-            )
+            score_generations = {
+                "base": base_images,
+                "trained": trained_images,
+                "reloaded": reloaded_images,
+            }
+            if selected is _CONTROLLED3D_PROFILE:
+                matched_metrics = _score_controlled3d_generations(
+                    development_assets, score_generations
+                )
+            else:
+                matched_metrics = _score_matched_generations(development_assets, score_generations)
         stage = "result_packaging"
         package_versions: dict[str, str] = {}
         for package in (
@@ -1317,8 +1437,13 @@ def _run_remote_training(payload_bytes: bytes, run_id: str, profile: object) -> 
                 ),
             }
         else:
-            receipt["study_type"] = "matched144"
+            receipt["study_type"] = (
+                "controlled3d144" if selected is _CONTROLLED3D_PROFILE else "matched144"
+            )
             receipt["metrics"] = {"per_pair": matched_metrics}
+            if selected is _CONTROLLED3D_PROFILE:
+                receipt["controlled3d_provenance"] = controlled3d_bindings
+                receipt["metrics_reference"] = CONTROLLED3D_METRIC_REFERENCE
             artifacts = {
                 f"adapter/{adapter_filename}": adapter_path.read_bytes(),
                 **{

@@ -234,3 +234,85 @@ def test_partial_matched_reload_keeps_earlier_images_in_failure_bundle(
         names = set(archive.namelist())
     assert "images/pair-0/reloaded.png" in names
     assert names == {"receipt.json", "images/pair-0/reloaded.png"}
+
+
+def test_controlled3d_profile_is_canonical_and_shares_the_144_update_contract() -> None:
+    profile = getattr(remote, "_CONTROLLED3D_PROFILE", None)
+    assert profile is not None, "Controlled3D study profile is missing"
+    assert remote._require_training_profile(profile) is profile
+    remote._validate_training_profile_contract(
+        profile,
+        train_pair_count=18,
+        batch_size=1,
+        dataset_repeat=1,
+        num_epochs=8,
+        gradient_accumulation_steps=1,
+        process_count=1,
+        save_steps=144,
+    )
+    remote._guard_profile_optimizer_update(profile, 143)
+    with pytest.raises(RuntimeError, match="144"):
+        remote._guard_profile_optimizer_update(profile, 144)
+
+
+def test_controlled3d_source_and_target_foreground_changes_are_profile_scoped() -> None:
+    from PIL import Image
+
+    source = Image.new("RGB", (512, 512), (10, 20, 30))
+    target = source.copy()
+    mask = Image.new("L", (512, 512), 0)
+    for x in range(100, 120):
+        for y in range(100, 120):
+            mask.putpixel((x, y), 255)
+            target.putpixel((x, y), (200, 210, 220))
+
+    validator = getattr(remote, "_validate_controlled3d_foreground_inputs", None)
+    assert callable(validator), "Controlled3D needs its scoped foreground validator"
+    validator(source, target, mask)
+    with pytest.raises(ValueError, match="mask"):
+        validator(source, target, Image.new("L", (512, 512), 128))
+
+
+def test_controlled3d_metrics_name_source_and_target_references() -> None:
+    from PIL import Image, ImageDraw
+
+    source = Image.new("RGB", (512, 512), (0, 0, 0))
+    target = source.copy()
+    ImageDraw.Draw(target).rectangle((20, 20, 39, 39), fill=(200, 200, 200))
+    mask = Image.new("L", (512, 512), 0)
+    ImageDraw.Draw(mask).rectangle((20, 20, 39, 39), fill=255)
+    assets = {"p-dev-cream": {"source": source, "target": target, "mask": mask}}
+    generated = {mode: {"p-dev-cream": target.copy()} for mode in ("base", "trained", "reloaded")}
+
+    metrics = remote._score_controlled3d_generations(assets, generated)
+
+    assert metrics["p-dev-cream"]["trained"]["foreground_mean_absolute_error"] > 0
+    assert metrics["p-dev-cream"]["trained"]["target_foreground_mean_absolute_error"] == 0
+    assert metrics["p-dev-cream"]["base"]["source_to_target_foreground_mean_absolute_error"] > 0
+    assert (
+        remote.CONTROLLED3D_METRIC_REFERENCE["source_to_target_foreground_mean_absolute_error"]
+        == "source_to_target_baseline"
+    )
+    assert remote.CONTROLLED3D_METRIC_REFERENCE["foreground_mean_absolute_error"] == "source"
+    assert remote.CONTROLLED3D_METRIC_REFERENCE["target_foreground_mean_absolute_error"] == "target"
+    assert "label" in remote.CONTROLLED3D_METRIC_REFERENCE["limitation"]
+
+
+def test_controlled3d_worker_fails_closed_before_gpu_when_manifest_pin_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import json
+    import zipfile
+
+    from product_scene_editor import controlled3d_study
+
+    monkeypatch.setattr(controlled3d_study, "APPROVED_CONTROLLED3D_MANIFEST_SHA256", None)
+    result = remote.run_remote_controlled3d_study(b"invalid archive", "controlled3d-test-001")
+    with zipfile.ZipFile(io.BytesIO(result)) as archive:
+        receipt = json.loads(archive.read("receipt.json"))
+
+    assert receipt["study_type"] == "controlled3d144"
+    assert receipt["status"] == "failed"
+    assert receipt["failure"]["stage"] == "input_validation"
+    assert "manifest digest pin is unset" in receipt["failure"]["message"]
