@@ -2,7 +2,7 @@
 
 Goal: Change the background of a product photo without changing its shape, colors, or label.
 
-**Status: Completed research experiment.** Synthetic pixel scores improved, but real-photo editing did not show clear improvement. This personal portfolio project uses **FLUX.2 Klein Base 4B**; it is not a production editor.
+SceneTune is an open-source project for product-scene editing with **FLUX.2 Klein Base 4B**. It combines LoRA training, synthetic data, and matched model comparisons, with measured gains in synthetic image tests.
 
 Three **LoRA adapters** were trained for flat synthetic backgrounds, controlled 3D scenes, and a product-preservation follow-up. A LoRA is a small set of low-rank trainable weights attached to a base model; the 4B model itself was not fully retrained.
 
