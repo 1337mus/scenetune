@@ -559,7 +559,8 @@ def _build_image(modal: Any, root: Path) -> Any:
     image = (
         modal.Image.from_registry(IMAGE)
         .env({"USE_HUB_KERNELS": "NO"})
-        .apt_install("git")
+        .apt_install("git", "build-essential")
+        .run_commands("cc --version && c++ --version && make --version")
         .pip_install(*packages, extra_index_url=remote.TORCH_INDEX)
         .run_commands(
             "git clone --filter=blob:none --no-checkout "

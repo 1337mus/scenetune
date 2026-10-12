@@ -8,22 +8,25 @@ A reference-image editing experiment with **FLUX.2 Klein Base 4B** and three sep
 
 The goal is to change product-image backgrounds while keeping products intact. These small development studies do not establish exact product preservation or a broad model ranking.
 
-## Product cutout check
+## Protected-product comparison
 
-A new approach keeps the original product pixels and generates a separate background.
-Its first successful prerequisite used BiRefNet Lite on 24 real catalog photos.
+All 24 accepted source photos and masks were reviewed before launch. The six development and 18 reserved cases remain frozen; reserved generated outputs remain unopened. The first comparison attempt stopped during its first generation because the remote image lacked a C compiler. It provides no image-quality result.
 
-- **18 / 24 cutouts** passed assistant visual review. Six need correction.
-- **4 / 4 repeat checks** matched after a fresh model load.
-- The worker took **16.9 seconds on one A10**. Training updates: **0**.
-- The app is stopped. The full scene comparison remains pending.
+| Measure | Result |
+|---|---|
+| Inputs | 24/24 accepted source photos and masks reviewed |
+| Split | 6 development / 18 reserved; reserved generated outputs unopened |
+| Frozen comparison | 52 model calls / 78 planned PNG artifacts |
+| Attempt | 1 model call attempted / 0 successful; 0 PNG artifacts, scores or training updates |
+| Runtime | Pipeline load 21.88 s; worker 115.77 s; stopped with 0 tasks |
+| Workspace usage (2026-10-12) | $7.23 gross / $0 net after credits; delayed aggregate, not a run invoice |
+| Allowance | $8, including the $1 mask reserve; not a provider spending cap |
 
-The first mask attempt failed our load-count check before producing any masks.
-The repaired run keeps the same model and photos. This is a cutout check, not a new
-FLUX training result or a segmentation benchmark.
+The local image-builder fix installs `build-essential` and checks `cc`, `c++` and `make`. CPU tests check the image-builder configuration. They do not test a real remote build. The earlier $15 pilot remains closed. Assistant-token costs are separate and unavailable.
 
+[Failed comparison report](docs/protected-product-comparison-failure-2026-10-12.md) ·
 [Cutout result and limits](docs/product-cutout-check-2026-10-12.md) ·
-[Two-method comparison design](docs/protected-product-comparison.md)
+[Comparison protocol](docs/protected-product-comparison.md)
 
 ## New 3D-scene study result (development only)
 
@@ -203,7 +206,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-The approved $15 pilot is closed. The real-photo comparison found product-position or size changes in every output and did not establish a clear quality improvement. Keep Barilla, Kinder Bueno and Quaker Cruesli out of training and testing. Any future improvement study needs broader realistic paired targets and untouched test photos; this result does not authorize another training run.
+There is no automatic retry. Any future comparison attempt needs a separate reviewed plan and fresh source, data and usage checks, using the same held-out pools. Verify the remote image build before GPU inference. Keep reserved results closed and do not add epochs to the old datasets.
 
 ## Development
 

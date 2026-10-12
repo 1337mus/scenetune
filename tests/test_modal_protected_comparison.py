@@ -179,7 +179,8 @@ def test_build_image_installs_the_exact_pinned_diffsynth_commit(tmp_path) -> Non
     assert operations == [
         ("from_registry", controller.IMAGE),
         ("env", {"USE_HUB_KERNELS": "NO"}),
-        ("apt_install", ("git",)),
+        ("apt_install", ("git", "build-essential")),
+        ("run_commands", ("cc --version && c++ --version && make --version",)),
         (
             "pip_install",
             tuple(

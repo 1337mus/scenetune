@@ -25,30 +25,24 @@ It does not guarantee a clean cutout, natural shadows or good lighting.
 
 ## Current stage
 
-The comparison is approved. Its input set is still being checked.
-The first GPU mask check stopped before inference. It produced no masks.
-The repaired check produced 24 drafts. We accepted 18 and repaired three on CPU.
-We excluded the other three photos and checked three replacements.
-All 24 final cutouts now pass assistant visual review and file checks.
-The full comparison remains pending. No new training has started.
+All 24 accepted source photos and masks, and the 6/18 split, were reviewed and frozen before launch. The first one-shot comparison run stopped during its first image generation because the remote image did not have a C compiler. The app is stopped with zero tasks; it produced no images or quality scores. Reserved generated outputs remain unopened. No training ran.
 
-| Item | Proposed comparison |
-| --- | --- |
-| Source photos | 24 new real catalog products from ABO |
-| Development pool | 6 products |
-| Reserved test pool | 18 products |
-| Training updates | 0 |
-| Methods | Ordinary full-image edit; empty scene plus original product |
-| Generations | 48 main outputs plus 4 fresh-model replay checks |
-| Output size | 512 × 512 pixels |
-| Model | Frozen FLUX.2 Klein base 4B; no LoRA adapter |
-| Compute | One A100 80 GB, 4 CPU cores, 64 GiB RAM |
-| Limits | 300 seconds startup; 1,800 seconds execution; zero retries |
-| New comparison allowance | $8 within the proposed $100–$150 project budget |
+The local image-builder fix installs `build-essential` and checks `cc`, `c++` and `make` before inference. CPU tests check the image-builder configuration. A real remote build has not verified the fix. There is no automatic retry. See the [failure report](protected-product-comparison-failure-2026-10-12.md).
 
-These are planning limits. They are not a provider dollar cap.
-Root must freeze the data, source, plan and price check before launching.
-The earlier $15 pilot remains closed. This comparison cannot restart it.
+| Item | Frozen plan | Attempt 1 |
+| --- | --- | --- |
+| Input set | 24 accepted ABO catalog cutouts | Same frozen payload; all 24 source photos and masks reviewed |
+| Pool split | 6 development / 18 reserved | Unchanged; reserved generated outputs unopened |
+| Cutout review | 18 original, 3 repaired, 3 replacements | All 24 accepted before launch |
+| Methods | Full-image edit; empty-scene generation plus original product | First full-image edit failed before output |
+| Model calls | 48 main calls plus 4 fresh-model replays (52 total) | 1 attempted; 0 succeeded |
+| PNG artifacts | 78 planned across outputs, composites and replays | 0 produced |
+| Training updates | 0 | 0 |
+| Model and compute | FLUX.2 Klein Base 4B; one A100 80 GB, 4 CPU cores, 64 GiB RAM | Base pipeline loaded once on CUDA in 21.88 seconds |
+| Worker and shutdown | 300-second startup; 1,800-second execution; one call; zero retries | 115.77 seconds; one spawn; stopped with zero tasks |
+| Allowance | $8, including the $1 mask reserve | Not a per-run charge or a spending cap |
+
+The signed [source commit ab7a429](https://github.com/1337mus/scenetune/commit/ab7a429023893dee1e1d0b3bde19fe31c0fac7b3) passed exact [CI run 38190964224, attempt 1](https://github.com/1337mus/scenetune/actions/runs/38190964224). The frozen plan and payload were not changed after the failure. The earlier $15 pilot remains closed.
 
 ## How we prepare the photos
 
@@ -77,8 +71,8 @@ Four failed its checks. Visual review also found missing package regions and
 retained background patches. A returned draft does not mean a good cutout.
 None of these simple-method masks has been accepted.
 
-The prerequisite check uses pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
-on the same 24 processed photos. It makes 24 first-output calls and four repeat
+The completed mask prerequisite used pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
+on the same 24 processed photos. It made 24 first-output calls and four repeat
 calls, with two strict model loads. Training updates: zero.
 
 | Mask prerequisite | Fixed limit |
@@ -88,25 +82,22 @@ calls, with two strict model loads. Training updates: zero.
 | Cost | Estimated compute $0.27; total step reserve $1 within the $8 allowance |
 | Estimate excludes | Image builds, storage, transfer and shutdown lag |
 
-The estimate is not a provider dollar cap. This check uses no new photos or
-training. All inference runs on Modal. The model revision, code, weights, input
-hashes and runtime versions must be fixed before launch. The 6/18 development/test
-group proposal is tentative and must stay unfrozen until masks are accepted.
-Every generated mask remains a draft until root has reviewed it. Root must also
-verify the app is stopped and has zero running tasks before accepting the mask
-set. If any mask fails review or the stopped-zero proof is missing, the comparison
-stays pending; do not lower the mask standard to fill the sample.
+The estimate was not a provider dollar cap. The mask check used no new photos or
+training. The source, weights, input hashes and runtime versions were fixed before
+that launch. Root reviewed the resulting cutouts, checked that the mask app had
+stopped with zero tasks, and later froze the accepted set and 6/18 split for the
+comparison. The mask standard was not lowered to fill the sample.
 
-### Repaired mask check
+### Repaired mask check: initial review
 
 The new run completed 24 first predictions and four exact repeat predictions.
 Both strict model loads passed. The worker took 16.9 seconds on one A10.
 The independent checker passed, and the app is stopped with zero tasks.
 
-Assistant review of all 24 unscaled sources and cutouts accepted 18 outlines.
-Six need correction: four lose package regions, one loses part of a USB hub,
-and one retains a drop shadow. Preserve these drafts. Review any CPU corrections
-separately before accepting the complete input set.
+The initial assistant review of all 24 unscaled sources and cutouts accepted 18
+outlines. Six needed correction: four lost package regions, one lost part of a
+USB hub, and one retained a drop shadow. Those drafts were preserved; the final
+accepted set is listed below.
 
 [Full cutout result and limits](product-cutout-check-2026-10-12.md).
 
@@ -123,10 +114,11 @@ We kept the rejected drafts and excluded photos. One replacement needed a repair
 we removed white background trapped between a suitcase’s handle rails.
 The source photo stayed unchanged.
 
-Official product records and image records check out. We group whole brands and
-product families into separate pools. The final split and payload must be frozen
-before generated outputs are reviewed. These are selected, clean catalog photos.
-Mask acceptance is an assistant judgment, not a ground-truth segmentation score.
+Official product and image records check out. Whole brands and product families
+were kept in separate pools. The final split and payload were frozen before
+launch; the first attempt produced no images. These are selected,
+clean catalog photos. Mask acceptance is an assistant judgment, not a ground-truth
+segmentation score.
 
 
 ### First mask check: stopped before inference
@@ -139,10 +131,9 @@ lists 44,362,703. An independent header check confirmed the 43-value difference.
 The float values match; the difference is in integer values.
 This is a loading-check defect, not a mask-quality result.
 
-The correction uses the pinned file count and keeps the full-file hash check.
-Failed loads will also retain their observed details. A new run needs a new
-reviewed plan, passing checks and a fresh cost review. It will use the same photos,
-model and settings. We will not restart the failed run.
+The correction used the pinned file count and kept the full-file hash check.
+Failed loads retain their observed details. A separately reviewed run used the
+same photos, model and settings; the failed run was not restarted.
 
 All earlier SceneTune product identities and development brands stay excluded.
 Rendered ABO views do not count as real catalog photos.
@@ -159,10 +150,11 @@ The empty-scene method receives no reference product image.
 It must not generate another product behind the pasted original.
 We check for extra objects, weak edges, floating products and poor shadows.
 
-A fresh model load repeats both methods on the first two development cases.
-All four replay checks compare decoded pixels with their first outputs.
-Test outputs stay closed until execution, replay and shutdown checks pass.
-Root must confirm the app stopped and has zero running tasks.
+A fresh model load and four replay checks were part of the frozen plan, but none
+ran: attempt 1 failed at its first generation. No visual review or quality score
+is available, and reserved generated outputs remain unopened. Any future attempt
+requires a separate reviewed plan and fresh source, data and usage checks. Verify
+the remote image build before GPU inference. There is no automatic retry.
 
 ## What the numbers can tell us
 
