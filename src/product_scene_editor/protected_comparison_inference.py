@@ -63,6 +63,7 @@ def _new_execution_state() -> dict[str, Any]:
         "generation_call_count": 0,
         "generation_records": [],
         "generation_call_timings": [],
+        "pipeline_loads": [],
         "replay_checks": [],
         "composed_integrity_records": [],
         "outputs": {},
@@ -205,6 +206,35 @@ def _compose_task(
     return composite_png, integrity
 
 
+def _load_tracked_pipeline(
+    stage: str,
+    manifest: dict[str, Any],
+    snapshots: dict[str, Path],
+    load_pipe: Any,
+    state: dict[str, Any],
+) -> Any:
+    started = time.monotonic()
+    record = {
+        "stage": stage,
+        "device": "cuda",
+        "component_pins": manifest.get("model_components"),
+        "duration_seconds": None,
+        "status": "loading",
+        "error": None,
+    }
+    state["pipeline_loads"].append(record)
+    try:
+        pipe = load_pipe(snapshots, "cuda")
+    except Exception as exc:
+        record["duration_seconds"] = round(time.monotonic() - started, 6)
+        record["status"] = "failed"
+        record["error"] = remote.sanitize_failure(exc)
+        raise
+    record["duration_seconds"] = round(time.monotonic() - started, 6)
+    record["status"] = "succeeded"
+    return pipe
+
+
 def _execute_schedule(
     manifest: dict[str, Any],
     files: dict[str, bytes],
@@ -225,7 +255,7 @@ def _execute_schedule(
     stage = "base_load"
     pipe: Any | None = None
     try:
-        pipe = load_pipe(snapshots, "cuda")
+        pipe = _load_tracked_pipeline("base_load", manifest, snapshots, load_pipe, state)
         for task in primary:
             stage = f"primary_generation_{task['case_id']}_{task['arm']}"
             generated, final_png = _run_task(
@@ -240,7 +270,7 @@ def _execute_schedule(
         runtime.cuda.empty_cache()
 
         stage = "fresh_replay_load"
-        pipe = load_pipe(snapshots, "cuda")
+        pipe = _load_tracked_pipeline("fresh_replay_load", manifest, snapshots, load_pipe, state)
         for task in replay:
             stage = f"replay_generation_{task['case_id']}_{task['arm']}"
             generated, final_png = _run_task(
@@ -336,6 +366,7 @@ def _receipt(
         "schedule": list(comparison.generation_schedule(manifest)) if manifest else [],
         "generation_call_count": state["generation_call_count"],
         "generation_call_timings": state["generation_call_timings"],
+        "pipeline_loads": state["pipeline_loads"],
         "arm_generation_seconds": arm_generation_seconds,
         "training_function_called": False,
         "optimizer_updates": 0,

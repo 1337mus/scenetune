@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zipfile import ZipFile
 
 import pytest
@@ -144,7 +145,7 @@ class _FakeRuntime:
         self.cuda = _FakeCuda()
 
     @contextmanager
-    def inference_mode(self):
+    def inference_mode(self) -> Iterator[None]:
         yield
 
 
@@ -258,7 +259,9 @@ def test_changed_empty_scene_replay_fails_after_recording_composite_evidence() -
     assert "replays/case-00/empty_scene_composite_final.png" in state["outputs"]
 
 
-def test_invalid_payload_fails_before_runtime_or_model_loading(monkeypatch) -> None:
+def test_invalid_payload_fails_before_runtime_or_model_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def forbidden_runtime_load() -> tuple[Any, Any]:
         raise AssertionError("runtime loading happened before payload validation")
 
@@ -273,7 +276,9 @@ def test_invalid_payload_fails_before_runtime_or_model_loading(monkeypatch) -> N
     assert receipt["failure"]["stage"] == "input_validation"
 
 
-def test_result_packaging_rejects_unsafe_members_and_over_limit_results(monkeypatch) -> None:
+def test_result_packaging_rejects_unsafe_members_and_over_limit_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with pytest.raises(ValueError, match="unsafe member"):
         worker._pack_result({"outputs/case-01/../escaped.png": b"data"})
 
@@ -381,6 +386,19 @@ def test_remote_endpoint_runs_valid_fixture_and_returns_bound_success_receipt(
     assert len(pipes[1].calls) == 4
     assert len(download_calls) == 2
     assert all(call["token"] is False for call in download_calls)
+    pipeline_loads = receipt["pipeline_loads"]
+    assert len(pipeline_loads) == 2
+    assert [record["stage"] for record in pipeline_loads] == [
+        "base_load",
+        "fresh_replay_load",
+    ]
+    assert all(record["device"] == "cuda" for record in pipeline_loads)
+    assert all(
+        record["component_pins"] == manifest["model_components"] for record in pipeline_loads
+    )
+    assert all(record["duration_seconds"] >= 0 for record in pipeline_loads)
+    assert all(record["status"] == "succeeded" for record in pipeline_loads)
+    assert all(record["error"] is None for record in pipeline_loads)
     assert runtime.cuda.reset_peak_memory_stats_calls == 1
     assert receipt["peak_allocated_bytes"] == 12345
     assert "outputs/case-00/full_image_edit.png" in names
@@ -434,6 +452,77 @@ def test_model_snapshot_failure_is_sanitized_and_precedes_generation(
     assert len(download_calls) == 1
     assert pipes == []
     assert names == ["receipt.json"]
+
+
+def test_base_pipeline_load_failure_is_recorded_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, payload, _runtime, pipes, _download_calls = _configure_remote_endpoint(monkeypatch)
+
+    def fail_load(_snapshots: dict[str, Path], _device: str) -> _FakePipe:
+        raise RuntimeError("base pipeline failed: Bearer sentinel-pipeline-value")
+
+    monkeypatch.setattr(remote, "_load_pipe", fail_load)
+    result = worker.run_remote_protected_comparison_inference(payload, "base-load-failure")
+
+    receipt, names = _unpack_receipt(result)
+    loads = receipt["pipeline_loads"]
+    assert receipt["status"] == "failed"
+    assert receipt["failure_stage"] == "base_load"
+    assert receipt["generation_call_count"] == 0
+    assert names == ["receipt.json"]
+    assert pipes == []
+    assert len(loads) == 1
+    assert loads[0]["stage"] == "base_load"
+    assert loads[0]["device"] == "cuda"
+    assert loads[0]["component_pins"] == manifest["model_components"]
+    assert loads[0]["status"] == "failed"
+    assert loads[0]["duration_seconds"] >= 0
+    assert loads[0]["error"] == "base pipeline failed: Bearer [REDACTED]"
+    assert "sentinel-pipeline-value" not in loads[0]["error"]
+
+
+def test_fresh_pipeline_load_failure_preserves_primary_evidence_and_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, payload, _runtime, pipes, _download_calls = _configure_remote_endpoint(monkeypatch)
+    load_pipe = remote._load_pipe
+    load_calls = 0
+
+    def fail_second_load(snapshots: dict[str, Path], device: str) -> _FakePipe:
+        nonlocal load_calls
+        load_calls += 1
+        if load_calls == 2:
+            raise RuntimeError("fresh pipeline failed: Bearer sentinel-fresh-pipeline-value")
+        return cast(_FakePipe, load_pipe(snapshots, device))
+
+    monkeypatch.setattr(remote, "_load_pipe", fail_second_load)
+    result = worker.run_remote_protected_comparison_inference(payload, "fresh-load-failure")
+
+    receipt, names = _unpack_receipt(result)
+    loads = receipt["pipeline_loads"]
+    assert receipt["status"] == "failed"
+    assert receipt["failure_stage"] == "fresh_replay_load"
+    assert receipt["failure"]["stage"] == "fresh_replay_load"
+    assert receipt["failure"]["message"] == "fresh pipeline failed: Bearer [REDACTED]"
+    assert receipt["generation_call_count"] == 48
+    assert len(receipt["generation_records"]) == 48
+    assert len(receipt["output_artifacts"]) == 72
+    assert len(pipes) == 1
+    assert len(pipes[0].calls) == 48
+    assert len(loads) == 2
+    assert loads[0]["stage"] == "base_load"
+    assert loads[0]["status"] == "succeeded"
+    assert loads[0]["error"] is None
+    assert loads[1]["stage"] == "fresh_replay_load"
+    assert loads[1]["device"] == "cuda"
+    assert loads[1]["component_pins"] == manifest["model_components"]
+    assert loads[1]["status"] == "failed"
+    assert loads[1]["duration_seconds"] >= 0
+    assert loads[1]["error"] == "fresh pipeline failed: Bearer [REDACTED]"
+    assert "sentinel-fresh-pipeline-value" not in loads[1]["error"]
+    assert sum(name.startswith("outputs/") for name in names) == 72
+    assert "receipt.json" in names
 
 
 def test_remote_endpoint_reports_partial_generation_evidence_and_sanitized_failure(
