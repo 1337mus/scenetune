@@ -27,6 +27,6 @@ The original R3 failure evidence remains unchanged. There were no retries, no tr
 
 ## Source and execution pins
 
-- Executed source commit: [4b9c7c6fab3f3fe08ba3febe6806d2882e31e301](https://github.com/1337mus/product-scene-editor/commit/4b9c7c6fab3f3fe08ba3febe6806d2882e31e301)
-- Exact CI run: [38020475190](https://github.com/1337mus/product-scene-editor/actions/runs/38020475190)
+- Executed source commit: [4b9c7c6fab3f3fe08ba3febe6806d2882e31e301](https://github.com/1337mus/scenetune/commit/4b9c7c6fab3f3fe08ba3febe6806d2882e31e301)
+- Exact CI run: [38020475190](https://github.com/1337mus/scenetune/actions/runs/38020475190)
 - DiffSynth-Studio revision: [ee631d4907d8d6fc3d39063a2a65c00a954c9bf5](https://github.com/modelscope/DiffSynth-Studio/commit/ee631d4907d8d6fc3d39063a2a65c00a954c9bf5)

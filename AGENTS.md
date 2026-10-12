@@ -1,12 +1,17 @@
 # SceneTune
 
-Personal project for Raj. Read `.context/kickoff.md` and current private vision context before compute.
+SceneTune is a completed research experiment in product-scene editing.
+The repository belongs to the personal account `1337mus` and is separate from Reflex.
 
-- Keep this repo private until Raj explicitly publishes it. Personal GitHub 1337mus only. No employer systems/data, Linear, or PRs. Signed descriptive commits directly to main.
-- Laptop is CPU-only. Never install Torch or download model weights locally. Model work belongs to Modal reflex-personal / rajath-61258 / main.
-- Root plans and reviews. Use bounded cheaper workers with explicit model selection; no nested teams or duplicate lanes.
-- Run deterministic CPU checks and exact-commit CI before remote compute. Pin source, data, all model components and dependencies.
-- Initial GPU pilot allowance is $15 within a proposed $100–$150 experiment. Time/resource limits are not a provider dollar cap. Refresh usage/rates before launches; stop on failure and preserve evidence.
-- Procedural packaging data is a synthetic pipeline pilot, not evidence for performance on real product photography. Keep unseen product identities out of training. Keep reserved test content closed during tuning.
-- No claims of quality improvement without matched base/adapter evaluation. Save and reload adapter before comparing. Report failures and actual costs separately from estimates.
-- Write short sentences, small tables and honest README sections.
+## Working on this repository
+
+- Start with the README and the relevant study report. Keep claims tied to the study, its data, and its measured limits.
+- Use Python 3.12 and the locked `uv` environment. Run the CPU checks listed in the README for code changes.
+- Keep the local development path CPU-only. GPU jobs require an operator's own configured account, a reviewed plan, pinned inputs, a budget, and explicit launch authorization.
+- Preserve product and scene splits. Do not tune on reserved results or reuse reviewed products as untouched confirmation data.
+- Compare models with matched inputs and settings. Check saved adapters in a fresh model before reporting results.
+- Preserve failed attempts and report them. Pixel similarity is not a measure of realism or readable label text.
+- Keep credentials, private planning, raw real-photo inputs, generated run bundles, and model weights outside Git. Preserve the ignore rules.
+- Follow the maintainer's delivery instructions. Write short sentences and small tables. Keep detailed run records in the study reports.
+
+Code is MIT licensed. Media and upstream components have separate license terms.

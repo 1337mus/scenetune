@@ -6,7 +6,7 @@ This confirms pipeline behavior only. It establishes no image-quality improvemen
 
 ## Pins and inputs
 
-- Source: [commit 5e3c47ed2e6738003157e77b01aa44f14f1afaef](https://github.com/1337mus/product-scene-editor/commit/5e3c47ed2e6738003157e77b01aa44f14f1afaef). [CI run 38021402616 passed](https://github.com/1337mus/product-scene-editor/actions/runs/38021402616).
+- Source: [commit 5e3c47ed2e6738003157e77b01aa44f14f1afaef](https://github.com/1337mus/scenetune/commit/5e3c47ed2e6738003157e77b01aa44f14f1afaef). [CI run 38021402616 passed](https://github.com/1337mus/scenetune/actions/runs/38021402616).
 - Trainer: DiffSynth revision ee631d4907d8d6fc3d39063a2a65c00a954c9bf5.
 - Data: 8 training pairs across pack-000–005; one development pair from held-out product pack-006.
 - Generation: same development source and prompt, seed 7321, 16 steps for base, trained, and reloaded outputs.

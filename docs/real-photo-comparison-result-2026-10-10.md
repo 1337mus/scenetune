@@ -9,7 +9,7 @@ R2 compared three development-only product cases using seven 512×512 generation
 | Worker time | 203.30 seconds, excluding app setup and shutdown |
 | Peak allocation | 16.55 GiB from Torch; not total GPU memory |
 | Shutdown | App stopped, zero tasks; no other active apps |
-| Exact CI | [38097654443](https://github.com/1337mus/product-scene-editor/actions/runs/38097654443): 143 CPU tests, lint, format and types passed |
+| Exact CI | [38097654443](https://github.com/1337mus/scenetune/actions/runs/38097654443): 143 CPU tests, lint, format and types passed |
 | Source | `b39fec4267561472c389c98de5f25bdb34da49ad` |
 
 ## What we can say

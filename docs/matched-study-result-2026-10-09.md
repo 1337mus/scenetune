@@ -139,8 +139,8 @@ The launcher’s shutdown handling also needs a focused correction before more G
 
 Run: `klein-edit-matched-2026-10-09-r1`.
 
-Source: [signed commit 6ca4acf](https://github.com/1337mus/product-scene-editor/commit/6ca4acfabb9f9efabc9b90e349e1d75a973cc5d8).
-Exact-source [CI run 38023994529](https://github.com/1337mus/product-scene-editor/actions/runs/38023994529) passed before launch.
+Source: [signed commit 6ca4acf](https://github.com/1337mus/scenetune/commit/6ca4acfabb9f9efabc9b90e349e1d75a973cc5d8).
+Exact-source [CI run 38023994529](https://github.com/1337mus/scenetune/actions/runs/38023994529) passed before launch.
 
 - Dataset manifest SHA-256: `206b07f99b2fd1c001b94898f3cacfa7010bacb7e08aa731b972135000e9a8f9`
 - Input ZIP SHA-256: `55e3c9bb441b8715393f8c7ab19887d1dbc94d16949c144bd6c304ebe4b6ef8c`

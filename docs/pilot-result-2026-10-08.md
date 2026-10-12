@@ -41,6 +41,6 @@ The original PNGs are preserved byte-for-byte; the contact sheet only resizes th
 
 ## Source and execution pins
 
-- Executed source commit: [683fc3a2eefed6d5d502e10f4c4db6209c6d8bce](https://github.com/1337mus/product-scene-editor/commit/683fc3a2eefed6d5d502e10f4c4db6209c6d8bce)
-- Exact CI run: [37860248287](https://github.com/1337mus/product-scene-editor/actions/runs/37860248287)
+- Executed source commit: [683fc3a2eefed6d5d502e10f4c4db6209c6d8bce](https://github.com/1337mus/scenetune/commit/683fc3a2eefed6d5d502e10f4c4db6209c6d8bce)
+- Exact CI run: [37860248287](https://github.com/1337mus/scenetune/actions/runs/37860248287)
 - DiffSynth-Studio revision: [ee631d4907d8d6fc3d39063a2a65c00a954c9bf5](https://github.com/modelscope/DiffSynth-Studio/commit/ee631d4907d8d6fc3d39063a2a65c00a954c9bf5)
