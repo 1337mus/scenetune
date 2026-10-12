@@ -27,7 +27,9 @@ It does not guarantee a clean cutout, natural shadows or good lighting.
 
 The comparison is approved. Its input set is still being checked.
 The first GPU mask check stopped before inference. It produced no masks.
-The repaired check produced 24 drafts: 18 passed visual review; six need correction.
+The repaired check produced 24 drafts. We accepted 18 and repaired three on CPU.
+We excluded the other three photos and checked three replacements.
+All 24 final cutouts now pass assistant visual review and file checks.
 The full comparison remains pending. No new training has started.
 
 | Item | Proposed comparison |
@@ -67,7 +69,7 @@ Four failed: transparent glass, faint edges, a clipped light fixture and a logo.
 The sandal candidate also has a reflection that needs a separate check.
 Both possible candidates failed the first actual mask check.
 The planter produced separate large regions. The sandal retained its reflection.
-No mask has been accepted yet. We kept those failures and did not relax the mask rules.
+At that stage, no mask had passed. We kept those failures and did not relax the rules.
 
 We then checked 30 more catalog photos. Six were unsuitable sources.
 The simple mask method returned 20 drafts from the 24 remaining photos.
@@ -107,6 +109,25 @@ and one retains a drop shadow. Preserve these drafts. Review any CPU corrections
 separately before accepting the complete input set.
 
 [Full cutout result and limits](product-cutout-check-2026-10-12.md).
+
+### Final input checks
+
+| Source of accepted cutouts | Products |
+| --- | ---: |
+| Original GPU drafts | 18 |
+| Original drafts with checked CPU repairs | 3 |
+| Replacement catalog photos with checked CPU masks | 3 |
+| **Total** | **24** |
+
+We kept the rejected drafts and excluded photos. One replacement needed a repair:
+we removed white background trapped between a suitcase’s handle rails.
+The source photo stayed unchanged.
+
+Official product records and image records check out. We group whole brands and
+product families into separate pools. The final split and payload must be frozen
+before generated outputs are reviewed. These are selected, clean catalog photos.
+Mask acceptance is an assistant judgment, not a ground-truth segmentation score.
+
 
 ### First mask check: stopped before inference
 
