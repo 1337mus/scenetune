@@ -26,7 +26,7 @@ from . import mask_preflight as contract
 from . import remote
 
 MAX_RESULT_BYTES = contract.MAX_RESULT_BYTES
-EXPECTED_MODEL_TENSOR_VALUE_COUNT = 44_362_660
+EXPECTED_MODEL_TENSOR_VALUE_COUNT = 44_362_703
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SAFE_RESULT_MEMBER = re.compile(
     r"^(?:outputs|replays)/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/(?:alpha|core)\.png$"
@@ -161,6 +161,17 @@ def _validate_strict_load(record: dict[str, Any]) -> None:
         raise ValueError("BiRefNet strict safetensors load did not satisfy the pinned contract")
 
 
+def _load_observed_model(
+    model_loader: Callable[[], tuple[Any, dict[str, Any]]], state: dict[str, Any]
+) -> Any:
+    observed_count = len(state["strict_loads"])
+    model, record = model_loader()
+    if len(state["strict_loads"]) == observed_count or state["strict_loads"][-1] is not record:
+        state["strict_loads"].append(record)
+    _validate_strict_load(record)
+    return model
+
+
 def _execute_schedule(
     manifest: dict[str, Any],
     files: dict[str, bytes],
@@ -179,9 +190,7 @@ def _execute_schedule(
     model: Any | None = None
     stage = "strict_model_load"
     try:
-        model, load_record = model_loader()
-        _validate_strict_load(load_record)
-        state["strict_loads"].append(load_record)
+        model = _load_observed_model(model_loader, state)
         for task in primary:
             case = cases[task["case_id"]]
             path = case["source_rgb"]["path"]
@@ -226,9 +235,7 @@ def _execute_schedule(
         runtime.cuda.empty_cache()
 
         stage = "fresh_strict_model_load"
-        model, load_record = model_loader()
-        _validate_strict_load(load_record)
-        state["strict_loads"].append(load_record)
+        model = _load_observed_model(model_loader, state)
         for task in replays:
             case = cases[task["case_id"]]
             path = case["source_rgb"]["path"]
@@ -340,7 +347,13 @@ def _verify_model_snapshot(snapshot: Path) -> dict[str, Any]:
     return config
 
 
-def _load_verified_model(snapshot: Path, torch: Any, load_file: Any) -> tuple[Any, dict[str, Any]]:
+def _load_verified_model(
+    snapshot: Path,
+    torch: Any,
+    load_file: Any,
+    *,
+    record_observer: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[Any, dict[str, Any]]:
     _verify_model_snapshot(snapshot)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -355,16 +368,35 @@ def _load_verified_model(snapshot: Path, torch: Any, load_file: Any) -> tuple[An
         config = config_module.BiRefNetConfig(bb_pretrained=False)
         model = model_module.BiRefNet(config=config)
         tensor_state = load_file(str(snapshot / "model.safetensors"), device="cpu")
-        loaded = model.load_state_dict(tensor_state, strict=True)
+        tensor_count = len(tensor_state)
+        tensor_value_count = sum(tensor.numel() for tensor in tensor_state.values())
+        try:
+            loaded = model.load_state_dict(tensor_state, strict=True)
+        except RuntimeError as exc:
+            record = {
+                "validated": False,
+                "strict": True,
+                "tensor_count": tensor_count,
+                "tensor_value_count": tensor_value_count,
+                "missing_keys": None,
+                "unexpected_keys": None,
+                "bb_pretrained": False,
+                "load_state_dict_failure": remote.sanitize_failure(exc),
+            }
+            if record_observer is not None:
+                record_observer(record)
+            raise
         record = {
             "validated": True,
             "strict": True,
-            "tensor_count": len(tensor_state),
-            "tensor_value_count": sum(tensor.numel() for tensor in tensor_state.values()),
+            "tensor_count": tensor_count,
+            "tensor_value_count": tensor_value_count,
             "missing_keys": list(loaded.missing_keys),
             "unexpected_keys": list(loaded.unexpected_keys),
             "bb_pretrained": False,
         }
+        if record_observer is not None:
+            record_observer(record)
         _validate_strict_load(record)
         model = model.to(device="cuda", dtype=torch.float32)
         model.eval()
@@ -563,7 +595,9 @@ def run_remote_mask_preflight(payload_bytes: bytes, run_id: str) -> bytes:
         stage = "inference"
 
         def model_loader() -> tuple[Any, dict[str, Any]]:
-            return _load_verified_model(snapshot, runtime, load_file)
+            return _load_verified_model(
+                snapshot, runtime, load_file, record_observer=state["strict_loads"].append
+            )
 
         def infer_masks(model: Any, source: bytes) -> tuple[Image.Image, Image.Image]:
             return _predict_masks(model, source, runtime, numpy)

@@ -26,7 +26,8 @@ It does not guarantee a clean cutout, natural shadows or good lighting.
 ## Current stage
 
 The comparison is approved. Its input set is still being checked.
-No new GPU run or training has started.
+The first GPU mask check stopped before inference. It produced no masks.
+No training has started.
 
 | Item | Proposed comparison |
 | --- | --- |
@@ -73,7 +74,7 @@ Four failed its checks. Visual review also found missing package regions and
 retained background patches. A returned draft does not mean a good cutout.
 None of these masks has been accepted.
 
-The next prerequisite check uses pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
+The prerequisite check uses pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
 on the same 24 processed photos. It makes 24 first-output calls and four repeat
 calls, with two strict model loads. Training updates: zero.
 
@@ -86,12 +87,27 @@ calls, with two strict model loads. Training updates: zero.
 
 The estimate is not a provider dollar cap. This check uses no new photos or
 training. All inference runs on Modal. The model revision, code, weights, input
-hashes and runtime versions must be fixed before launch. The 7/17 development/test
-group split is tentative and must stay unfrozen until masks are accepted.
+hashes and runtime versions must be fixed before launch. The 6/18 development/test
+group proposal is tentative and must stay unfrozen until masks are accepted.
 Every generated mask remains a draft until root has reviewed it. Root must also
 verify the app is stopped and has zero running tasks before accepting the mask
 set. If any mask fails review or the stopped-zero proof is missing, the comparison
 stays pending; do not lower the mask standard to fill the sample.
+
+### First mask check: stopped before inference
+
+The first run failed a model-file count check. It made zero predictions.
+The app is stopped and has zero running tasks. We keep that failed run unchanged.
+
+Hugging Face's summary lists 44,362,660 stored values. The pinned file header
+lists 44,362,703. An independent header check confirmed the 43-value difference.
+The float values match; the difference is in integer values.
+This is a loading-check defect, not a mask-quality result.
+
+The correction uses the pinned file count and keeps the full-file hash check.
+Failed loads will also retain their observed details. A new run needs a new
+reviewed plan, passing checks and a fresh cost review. It will use the same photos,
+model and settings. We will not restart the failed run.
 
 All earlier SceneTune product identities and development brands stay excluded.
 Rendered ABO views do not count as real catalog photos.

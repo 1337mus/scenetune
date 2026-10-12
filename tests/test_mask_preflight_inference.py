@@ -118,8 +118,8 @@ def test_strict_load_requires_exact_pinned_tensor_value_count() -> None:
     record = {
         "validated": True,
         "strict": True,
-        "tensor_count": 28_812,
-        "tensor_value_count": 44_362_660,
+        "tensor_count": 586,
+        "tensor_value_count": 44_362_703,
         "missing_keys": [],
         "unexpected_keys": [],
         "bb_pretrained": False,
@@ -134,6 +134,111 @@ def test_strict_load_requires_exact_pinned_tensor_value_count() -> None:
         assert "strict safetensors load" in str(exc)
     else:
         raise AssertionError("strict load accepted a mismatched tensor-value count")
+
+
+def _run_preflight_for_load_record_test(monkeypatch, load_verified_model) -> bytes:
+    cases = [
+        {
+            "case_id": f"case-{index:02d}",
+            "source_rgb": {"path": f"cases/case-{index:02d}/source.png"},
+        }
+        for index in range(24)
+    ]
+    manifest = {"cases": cases}
+    files = {f"cases/case-{index:02d}/source.png": b"unused" for index in range(24)}
+    monkeypatch.setattr(
+        worker.contract, "validate_payload_bytes", lambda _payload: (manifest, files)
+    )
+    runtime = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            get_device_name=lambda _index: "Fake CUDA GPU",
+            reset_peak_memory_stats=lambda: None,
+            max_memory_allocated=lambda: 0,
+            empty_cache=lambda: None,
+        ),
+        inference_mode=nullcontext,
+    )
+    monkeypatch.setattr(worker, "_runtime_dependencies", lambda: (runtime, None, None, None))
+    monkeypatch.setattr(worker, "_runtime_versions", lambda: worker.contract.RUNTIME_PINS)
+    monkeypatch.setattr(worker, "_load_snapshot", lambda _download: Path("/fake-snapshot"))
+    monkeypatch.setattr(worker, "_load_verified_model", load_verified_model)
+    alpha = Image.new("L", (512, 512), 255)
+    monkeypatch.setattr(worker, "_predict_masks", lambda *_args: (alpha, alpha.copy()))
+    return worker.run_remote_mask_preflight(b"payload", "run-load-test")
+
+
+def test_first_rejected_strict_load_is_kept_in_failure_receipt(monkeypatch) -> None:
+    observed = {
+        "validated": True,
+        "strict": True,
+        "tensor_count": 586,
+        "tensor_value_count": 44_362_660,
+        "missing_keys": [],
+        "unexpected_keys": [],
+        "bb_pretrained": False,
+    }
+
+    def load_verified_model(*_args, record_observer=None):
+        if record_observer is not None:
+            record_observer(observed)
+        worker._validate_strict_load(observed)
+        raise AssertionError("unreachable")
+
+    result = _run_preflight_for_load_record_test(monkeypatch, load_verified_model)
+    with ZipFile(BytesIO(result)) as archive:
+        receipt = json.loads(archive.read("receipt.json"))
+
+    assert receipt["status"] == "failed"
+    assert receipt["failure_stage"] == "strict_model_load"
+    assert receipt["inference_call_count"] == 0
+    assert receipt["strict_loads"] == [observed]
+
+
+def test_fresh_rejected_strict_load_is_kept_in_failure_receipt(monkeypatch) -> None:
+    records = [
+        {
+            "validated": True,
+            "strict": True,
+            "tensor_count": 586,
+            "tensor_value_count": 44_362_703,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "bb_pretrained": False,
+        },
+        {
+            "validated": True,
+            "strict": True,
+            "tensor_count": 586,
+            "tensor_value_count": 44_362_702,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "bb_pretrained": False,
+        },
+    ]
+    attempts = 0
+
+    def load_verified_model(*_args, record_observer=None):
+        nonlocal attempts
+        record = records[attempts]
+        attempts += 1
+        if record_observer is not None:
+            record_observer(record)
+        worker._validate_strict_load(record)
+        return object(), record
+
+    result = _run_preflight_for_load_record_test(monkeypatch, load_verified_model)
+    with ZipFile(BytesIO(result)) as archive:
+        receipt = json.loads(archive.read("receipt.json"))
+
+    assert attempts == 2
+    assert receipt["status"] == "failed"
+    assert receipt["failure_stage"] == "fresh_strict_model_load"
+    assert receipt["inference_call_count"] == 24
+    assert len(receipt["generation_records"]) == 24
+    assert len(receipt["output_artifacts"]) == 48
+    assert receipt["strict_loads"] == records
 
 
 def test_replay_mismatch_keeps_partial_outputs_and_replay_evidence() -> None:
@@ -164,8 +269,8 @@ def test_replay_mismatch_keeps_partial_outputs_and_replay_evidence() -> None:
             {
                 "validated": True,
                 "strict": True,
-                "tensor_count": 28_812,
-                "tensor_value_count": 44_362_660,
+                "tensor_count": 586,
+                "tensor_value_count": 44_362_703,
                 "missing_keys": [],
                 "unexpected_keys": [],
                 "bb_pretrained": False,
@@ -238,27 +343,39 @@ def test_snapshot_verification_checks_every_hash_and_false_backbone_config(
         raise AssertionError("snapshot verification accepted bb_pretrained=true")
 
 
-def test_verified_loader_records_strict_cpu_tensor_value_count(tmp_path: Path, monkeypatch) -> None:
+def _fake_verified_loader(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    tensor_value_count: int,
+    load_state_dict_error: str | None = None,
+) -> tuple[Path, SimpleNamespace, object, list[tuple[str, str]]]:
+    load_result = (
+        b"        return type('LoadResult', (), {\n"
+        b"            'missing_keys': [], 'unexpected_keys': []})()\n"
+        if load_state_dict_error is None
+        else f"        raise RuntimeError({load_state_dict_error!r})\n".encode()
+    )
+    model_source = (
+        b"class BiRefNet:\n"
+        b"    def __init__(self, config):\n"
+        b"        self.config = config\n"
+        b"    def load_state_dict(self, state, strict):\n"
+        b"        self.state, self.strict = state, strict\n"
+        + load_result
+        + b"    def to(self, device, dtype):\n"
+        + b"        self.device, self.dtype = device, dtype\n"
+        + b"        return self\n"
+        + b"    def eval(self):\n"
+        + b"        self.is_eval = True\n"
+    )
     contents = {
         "BiRefNet_config.py": (
             b"class BiRefNetConfig:\n"
             b"    def __init__(self, bb_pretrained=False):\n"
             b"        self.bb_pretrained = bb_pretrained\n"
         ),
-        "birefnet.py": (
-            b"class BiRefNet:\n"
-            b"    def __init__(self, config):\n"
-            b"        self.config = config\n"
-            b"    def load_state_dict(self, state, strict):\n"
-            b"        self.state, self.strict = state, strict\n"
-            b"        return type('LoadResult', (), {\n"
-            b"            'missing_keys': [], 'unexpected_keys': []})()\n"
-            b"    def to(self, device, dtype):\n"
-            b"        self.device, self.dtype = device, dtype\n"
-            b"        return self\n"
-            b"    def eval(self):\n"
-            b"        self.is_eval = True\n"
-        ),
+        "birefnet.py": model_source,
         "config.json": b'{"bb_pretrained": false}',
         "model.safetensors": b"fixture weights",
     }
@@ -275,15 +392,21 @@ def test_verified_loader_records_strict_cpu_tensor_value_count(tmp_path: Path, m
 
     class Weight:
         def numel(self) -> int:
-            return worker.EXPECTED_MODEL_TENSOR_VALUE_COUNT
+            return tensor_value_count
 
     def load_file(_path: str, *, device: str):
         loaded.append(("model.safetensors", device))
         return {"weight": Weight()}
 
-    model, record = worker._load_verified_model(
-        snapshot, SimpleNamespace(float32="float32"), load_file
+    return snapshot, SimpleNamespace(float32="float32"), load_file, loaded
+
+
+def test_verified_loader_records_strict_cpu_tensor_value_count(tmp_path: Path, monkeypatch) -> None:
+    snapshot, runtime, load_file, loaded = _fake_verified_loader(
+        tmp_path, monkeypatch, tensor_value_count=worker.EXPECTED_MODEL_TENSOR_VALUE_COUNT
     )
+
+    model, record = worker._load_verified_model(snapshot, runtime, load_file)
 
     assert record["validated"] is True
     assert record["strict"] is True
@@ -295,6 +418,62 @@ def test_verified_loader_records_strict_cpu_tensor_value_count(tmp_path: Path, m
     assert model.config.bb_pretrained is False
     assert model.device == "cuda"
     assert model.is_eval is True
+
+
+def test_verified_loader_observes_rejected_tensor_count_before_validation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    observed: list[dict[str, object]] = []
+    snapshot, runtime, load_file, loaded = _fake_verified_loader(
+        tmp_path, monkeypatch, tensor_value_count=44_362_660
+    )
+
+    with pytest.raises(ValueError, match="strict safetensors load"):
+        worker._load_verified_model(snapshot, runtime, load_file, record_observer=observed.append)
+
+    assert loaded == [("model.safetensors", "cpu")]
+    assert observed == [
+        {
+            "validated": True,
+            "strict": True,
+            "tensor_count": 1,
+            "tensor_value_count": 44_362_660,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "bb_pretrained": False,
+        }
+    ]
+
+
+def test_verified_loader_records_strict_state_dict_key_failure(tmp_path: Path, monkeypatch) -> None:
+    failure = (
+        'Error(s) in loading state_dict for BiRefNet: Missing key(s): "missing". '
+        'Unexpected key(s): "extra".'
+    )
+    observed: list[dict[str, object]] = []
+    snapshot, runtime, load_file, loaded = _fake_verified_loader(
+        tmp_path,
+        monkeypatch,
+        tensor_value_count=worker.EXPECTED_MODEL_TENSOR_VALUE_COUNT,
+        load_state_dict_error=failure,
+    )
+
+    with pytest.raises(RuntimeError, match="Missing key"):
+        worker._load_verified_model(snapshot, runtime, load_file, record_observer=observed.append)
+
+    assert loaded == [("model.safetensors", "cpu")]
+    assert observed == [
+        {
+            "validated": False,
+            "strict": True,
+            "tensor_count": 1,
+            "tensor_value_count": worker.EXPECTED_MODEL_TENSOR_VALUE_COUNT,
+            "missing_keys": None,
+            "unexpected_keys": None,
+            "bb_pretrained": False,
+            "load_state_dict_failure": failure,
+        }
+    ]
 
 
 def test_probability_tensor_requires_pinned_shape_and_finite_values() -> None:
@@ -342,15 +521,20 @@ def test_packaging_failure_returns_failed_receipt_with_runtime_evidence(monkeypa
     load_record = {
         "validated": True,
         "strict": True,
-        "tensor_count": 28_812,
-        "tensor_value_count": 44_362_660,
+        "tensor_count": 586,
+        "tensor_value_count": 44_362_703,
         "missing_keys": [],
         "unexpected_keys": [],
         "bb_pretrained": False,
     }
-    monkeypatch.setattr(
-        worker, "_load_verified_model", lambda *_args: (object(), load_record.copy())
-    )
+
+    def load_verified_model(*_args, record_observer=None):
+        record = load_record.copy()
+        if record_observer is not None:
+            record_observer(record)
+        return object(), record
+
+    monkeypatch.setattr(worker, "_load_verified_model", load_verified_model)
     alpha = Image.new("L", (512, 512), 255)
     core = alpha.copy()
     monkeypatch.setattr(worker, "_predict_masks", lambda *_args: (alpha, core))
@@ -377,8 +561,8 @@ def test_packaging_failure_returns_failed_receipt_with_runtime_evidence(monkeypa
     assert receipt["packaging_failure"] == receipt["failure"]
     assert receipt["gpu"] == {"device_count": 1, "name": "Fake CUDA GPU"}
     assert [load["tensor_value_count"] for load in receipt["strict_loads"]] == [
-        44_362_660,
-        44_362_660,
+        44_362_703,
+        44_362_703,
     ]
 
 
