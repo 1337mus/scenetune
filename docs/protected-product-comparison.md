@@ -27,7 +27,8 @@ It does not guarantee a clean cutout, natural shadows or good lighting.
 
 The comparison is approved. Its input set is still being checked.
 The first GPU mask check stopped before inference. It produced no masks.
-No training has started.
+The repaired check produced 24 drafts: 18 passed visual review; six need correction.
+The full comparison remains pending. No new training has started.
 
 | Item | Proposed comparison |
 | --- | --- |
@@ -72,7 +73,7 @@ We then checked 30 more catalog photos. Six were unsuitable sources.
 The simple mask method returned 20 drafts from the 24 remaining photos.
 Four failed its checks. Visual review also found missing package regions and
 retained background patches. A returned draft does not mean a good cutout.
-None of these masks has been accepted.
+None of these simple-method masks has been accepted.
 
 The prerequisite check uses pretrained [BiRefNet Lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)
 on the same 24 processed photos. It makes 24 first-output calls and four repeat
@@ -93,6 +94,19 @@ Every generated mask remains a draft until root has reviewed it. Root must also
 verify the app is stopped and has zero running tasks before accepting the mask
 set. If any mask fails review or the stopped-zero proof is missing, the comparison
 stays pending; do not lower the mask standard to fill the sample.
+
+### Repaired mask check
+
+The new run completed 24 first predictions and four exact repeat predictions.
+Both strict model loads passed. The worker took 16.9 seconds on one A10.
+The independent checker passed, and the app is stopped with zero tasks.
+
+Assistant review of all 24 unscaled sources and cutouts accepted 18 outlines.
+Six need correction: four lose package regions, one loses part of a USB hub,
+and one retains a drop shadow. Preserve these drafts. Review any CPU corrections
+separately before accepting the complete input set.
+
+[Full cutout result and limits](product-cutout-check-2026-10-12.md).
 
 ### First mask check: stopped before inference
 

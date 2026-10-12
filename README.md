@@ -8,6 +8,23 @@ A reference-image editing experiment with **FLUX.2 Klein Base 4B** and three sep
 
 The goal is to change product-image backgrounds while keeping products intact. These small development studies do not establish exact product preservation or a broad model ranking.
 
+## Product cutout check
+
+A new approach keeps the original product pixels and generates a separate background.
+Its first successful prerequisite used BiRefNet Lite on 24 real catalog photos.
+
+- **18 / 24 cutouts** passed assistant visual review. Six need correction.
+- **4 / 4 repeat checks** matched after a fresh model load.
+- The worker took **16.9 seconds on one A10**. Training updates: **0**.
+- The app is stopped. The full scene comparison remains pending.
+
+The first mask attempt failed our load-count check before producing any masks.
+The repaired run keeps the same model and photos. This is a cutout check, not a new
+FLUX training result or a segmentation benchmark.
+
+[Cutout result and limits](docs/product-cutout-check-2026-10-12.md) ·
+[Two-method comparison design](docs/protected-product-comparison.md)
+
 ## New 3D-scene study result (development only)
 
 The signed [source commit 150f8ca](https://github.com/1337mus/scenetune/commit/150f8ca54379bb07f7d39fa7ee180278bf29c824) passed exact [CI run 38128615093](https://github.com/1337mus/scenetune/actions/runs/38128615093). The worker completed all 144 updates.
