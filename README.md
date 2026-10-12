@@ -10,23 +10,22 @@ The goal is to change product-image backgrounds while keeping products intact. T
 
 ## Protected-product comparison
 
-All 24 accepted source photos and masks were reviewed before launch. The six development and 18 reserved cases remain frozen; reserved generated outputs remain unopened. The first comparison attempt stopped during its first generation because the remote image lacked a C compiler. It provides no image-quality result.
+The completed 2026-10-12 R2 comparison used 24 selected real catalog photos, split into six development and 18 reserved cases by whole brand and product family. It compared full-image editing with empty-scene generation plus compositing the original product. No training ran.
 
-| Measure | Result |
+| Result | R2 |
 |---|---|
-| Inputs | 24/24 accepted source photos and masks reviewed |
-| Split | 6 development / 18 reserved; reserved generated outputs unopened |
-| Frozen comparison | 52 model calls / 78 planned PNG artifacts |
-| Attempt | 1 model call attempted / 0 successful; 0 PNG artifacts, scores or training updates |
-| Runtime | Pipeline load 21.88 s; worker 115.77 s; stopped with 0 tasks |
-| Workspace usage (2026-10-12) | $7.23 gross / $0 net after credits; delayed aggregate, not a run invoice |
-| Allowance | $8, including the $1 mask reserve; not a provider spending cap |
+| Generation | 52 calls; 78 PNGs (72 main, 6 replay); 2 successful model loads |
+| Integrity | Composite protected pixels exact in 24/24 cases; four fresh-load replays matched exactly |
+| Visual usability | 0/6 development and 0/18 reserved cases usable in either method |
+| Common failures | Poor composite ground contact in 24/24; unrequested upright stone in 14/24 |
+| Compute | 394.674 seconds; Torch peak allocation 16.46 GiB, not total GPU memory |
+| Training updates | 0 |
 
-The local image-builder fix installs `build-essential` and checks `cc`, `c++` and `make`. CPU tests check the image-builder configuration. They do not test a real remote build. The earlier $15 pilot remains closed. Assistant-token costs are separate and unavailable.
+Composites preserved source pixels but failed on scene quality: all 24 had poor ground contact, and 14 added an unrequested stone. Every full-image edit changed product size, shape or color. The reserved gate failed; these selected clean catalog photos and assistant judgments do not establish a broad ranking or human preference.
 
-[Failed comparison report](docs/protected-product-comparison-failure-2026-10-12.md) ·
-[Cutout result and limits](docs/product-cutout-check-2026-10-12.md) ·
-[Comparison protocol](docs/protected-product-comparison.md)
+R2's original validator rejected a successful receipt because its exact-field check omitted the pinned Modal SDK version, despite all 17 pinned runtime entries matching. An offline validator correction and two audits passed against the unchanged result bundle; there was no rerun. R1's earlier missing-compiler failure remains documented separately.
+
+[Full R2 result and all 24 case outcomes](docs/protected-product-comparison-result-2026-10-12.md) · [Comparison protocol and limits](docs/protected-product-comparison.md) · [R1 failure report](docs/protected-product-comparison-failure-2026-10-12.md)
 
 ## New 3D-scene study result (development only)
 
@@ -206,7 +205,7 @@ A corrected read-only check then confirmed the app was stopped with zero tasks. 
 
 ## Next
 
-There is no automatic retry. Any future comparison attempt needs a separate reviewed plan and fresh source, data and usage checks, using the same held-out pools. Verify the remote image build before GPU inference. Keep reserved results closed and do not add epochs to the old datasets.
+Do not add epochs or launch GPU work automatically from this result. Address empty-scene object insertion, product-to-ground contact and product-interior changes first. Any future study requires a separate root-reviewed plan, compute clearance and new untouched product identities because the reserved outputs have been reviewed.
 
 ## Development
 

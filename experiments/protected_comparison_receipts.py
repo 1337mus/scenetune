@@ -524,8 +524,9 @@ def validate_result_bundle(
     runtime_versions = receipt.get("runtime_versions")
     if not isinstance(runtime_versions, dict):
         raise ValueError("receipt runtime_versions must be an object")
+    expected_runtime_versions = {"modal": "1.6.1", **remote.RUNTIME_PINS}
     if status == "passed" and (
-        observed_commit != remote.DIFFSYNTH_COMMIT or runtime_versions != remote.RUNTIME_PINS
+        observed_commit != remote.DIFFSYNTH_COMMIT or runtime_versions != expected_runtime_versions
     ):
         raise ValueError("passed receipt does not prove the pinned runtime")
     elapsed = _finite_nonnegative(receipt.get("elapsed_seconds"), "elapsed time")

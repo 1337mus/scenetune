@@ -25,24 +25,30 @@ It does not guarantee a clean cutout, natural shadows or good lighting.
 
 ## Current stage
 
-All 24 accepted source photos and masks, and the 6/18 split, were reviewed and frozen before launch. The first one-shot comparison run stopped during its first image generation because the remote image did not have a C compiler. The app is stopped with zero tasks; it produced no images or quality scores. Reserved generated outputs remain unopened. No training ran.
+R1, the first comparison attempt, stopped on its first generation because its remote image had no C compiler. It produced no images or scores; its failure report remains historical and its evidence is preserved.
 
-The local image-builder fix installs `build-essential` and checks `cc`, `c++` and `make` before inference. CPU tests check the image-builder configuration. A real remote build has not verified the fix. There is no automatic retry. See the [failure report](protected-product-comparison-failure-2026-10-12.md).
+R2 ran the frozen 24-case comparison after a separate CPU-only remote image-build gate verified C, C++ and make. The worker completed all 52 generation calls, 78 PNGs, two successful model loads, four exact fresh-load replays and 26 composites, then stopped with zero tasks. No training ran. The 24 cases were 6 development and 18 reserved, held out by whole brand and product family.
 
-| Item | Frozen plan | Attempt 1 |
-| --- | --- | --- |
+The original local receipt validator rejected the successful worker receipt because its exact-field check omitted the pinned Modal SDK version. All 17 runtime pins matched. A narrow offline validator correction passed a test that reproduced the rejection and then passed with the fix, 26 affected-module CPU tests and 27 independent checker tests. The official and independent audits passed the same unchanged R2 result bundle. The original R2 marker, pending result, source and plan remain preserved; there was no recovery run, relaunch or new GPU generation.
+
+Review found 0/6 development and 0/18 reserved cases usable in either method. Protected pixels were exact in all 24 composites, but all had poor ground contact and 14 added an unrequested stone-like object. Every full-image edit changed product size, shape or color, so the frozen gate failed. The reserved cases have now been reviewed; future confirmation needs new untouched products.
+
+[Full R2 result, audit limits and all case outcomes](protected-product-comparison-result-2026-10-12.md) · [R1 failure report](protected-product-comparison-failure-2026-10-12.md).
+
+| Item | Frozen plan | R1 attempt 1 |
+|---|---|---|
 | Input set | 24 accepted ABO catalog cutouts | Same frozen payload; all 24 source photos and masks reviewed |
 | Pool split | 6 development / 18 reserved | Unchanged; reserved generated outputs unopened |
 | Cutout review | 18 original, 3 repaired, 3 replacements | All 24 accepted before launch |
 | Methods | Full-image edit; empty-scene generation plus original product | First full-image edit failed before output |
-| Model calls | 48 main calls plus 4 fresh-model replays (52 total) | 1 attempted; 0 succeeded |
+| Model calls | 48 main calls plus 4 fresh-load replays (52 total) | 1 attempted; 0 succeeded |
 | PNG artifacts | 78 planned across outputs, composites and replays | 0 produced |
 | Training updates | 0 | 0 |
 | Model and compute | FLUX.2 Klein Base 4B; one A100 80 GB, 4 CPU cores, 64 GiB RAM | Base pipeline loaded once on CUDA in 21.88 seconds |
 | Worker and shutdown | 300-second startup; 1,800-second execution; one call; zero retries | 115.77 seconds; one spawn; stopped with zero tasks |
 | Allowance | $8, including the $1 mask reserve | Not a per-run charge or a spending cap |
 
-The signed [source commit ab7a429](https://github.com/1337mus/scenetune/commit/ab7a429023893dee1e1d0b3bde19fe31c0fac7b3) passed exact [CI run 38190964224, attempt 1](https://github.com/1337mus/scenetune/actions/runs/38190964224). The frozen plan and payload were not changed after the failure. The earlier $15 pilot remains closed.
+R1's signed [source commit ab7a429](https://github.com/1337mus/scenetune/commit/ab7a429023893dee1e1d0b3bde19fe31c0fac7b3) passed exact [CI run 38190964224, attempt 1](https://github.com/1337mus/scenetune/actions/runs/38190964224). The separate R2 result and audits are described above. The earlier $15 pilot remains closed.
 
 ## How we prepare the photos
 
@@ -116,9 +122,9 @@ The source photo stayed unchanged.
 
 Official product and image records check out. Whole brands and product families
 were kept in separate pools. The final split and payload were frozen before
-launch; the first attempt produced no images. These are selected,
-clean catalog photos. Mask acceptance is an assistant judgment, not a ground-truth
-segmentation score.
+launch; R1 produced no images, while R2 later completed the comparison described
+above. These are selected, clean catalog photos. Mask acceptance is an assistant
+judgment, not a ground-truth segmentation score.
 
 
 ### First mask check: stopped before inference
@@ -146,15 +152,17 @@ Seeds start at 7,321 and increase in sorted case-ID order.
 Both use 16 steps and guidance scale 4.
 Prompts and settings stay fixed once the plan is frozen.
 
-The empty-scene method receives no reference product image.
-It must not generate another product behind the pasted original.
-We check for extra objects, weak edges, floating products and poor shadows.
+The empty-scene method received no reference product image. It generated an
+empty background before the original product was composited. The R2 output still
+contained unrequested stone-like objects and poor product-to-ground contact;
+compositing alone did not make the scenes usable.
 
-A fresh model load and four replay checks were part of the frozen plan, but none
-ran: attempt 1 failed at its first generation. No visual review or quality score
-is available, and reserved generated outputs remain unopened. Any future attempt
-requires a separate reviewed plan and fresh source, data and usage checks. Verify
-the remote image build before GPU inference. There is no automatic retry.
+The planned fresh model load and four replay checks ran in R2 and matched exactly.
+The root reviewed all 24 case sheets. The frozen reserved gate failed, and the
+reserved outputs have now been reviewed; they are not a fresh held-out set. The [R2 result report](protected-product-comparison-result-2026-10-12.md)
+records every case and the limits of these assistant judgments. Any future
+confirmatory study requires new untouched product identities, a separate
+root-reviewed plan and compute clearance. No GPU launch happens automatically.
 
 ## What the numbers can tell us
 
@@ -173,29 +181,27 @@ Our exact-pixel claim applies to the reviewed 512 × 512 source.
 
 A usable result must keep the whole intended product, follow the scene request,
 and have no obvious cutout gap, duplicate object or floating placement.
-We will count each failure type separately.
+The R2 report counts each failure type separately.
 
-The exploratory gate is at least 14 of 18 usable reserved-test composites
-and at least four more usable cases than the ordinary edit.
-All 18 must pass protected-pixel integrity. These small counts do not establish
-broad superiority or performance on difficult, unscreened photos.
+The prespecified exploratory gate was at least 14 of 18 usable reserved-test
+composites and at least four more usable cases than the ordinary edit, with all
+18 passing protected-pixel integrity. R2 preserved protected pixels but had zero
+usable reserved composites and zero usable full-image edits, so the observed gain
+was zero and the gate failed. These small counts do not establish broad
+superiority or performance on difficult, unscreened photos.
 
 We will report all cases, failures and ties.
 We will separate automated integrity checks from root visual judgments.
 Root visual judgments are not a new human preference study.
 We will not call pixel error a text-reading or realism score.
 
-## Decide whether training is useful
+## Decide what happens next
 
-More training is conditional. We first need a measured, useful remaining gap.
-
-- If cutouts solve product preservation and scenes look good, build the demo.
-- If backgrounds or scene fit still fail, identify the specific failure.
-- If a checked training set can address that failure, propose 500–1,000 pairs.
-- If masks remain unreliable, improve the mask step before training FLUX.
-
-We will not add epochs to the old small dataset by default.
-The next training plan needs matched targets and fresh reserved products.
+R2 did not produce a usable method or authorize extra epochs or new training.
+Address the observed failures: make empty backgrounds genuinely empty, improve
+product-to-ground contact and shadows, and keep product interiors unchanged. Any
+future study needs new untouched product identities, a separate root-reviewed
+plan and compute clearance. No GPU work launches automatically.
 
 ## Data source
 

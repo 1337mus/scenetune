@@ -18,7 +18,7 @@ from experiments import modal_protected_comparison as controller
 from experiments import protected_comparison_receipts as receipts
 from product_scene_editor import protected_comparison as comparison
 from product_scene_editor import protected_comparison_inference as worker
-from product_scene_editor import remote
+from product_scene_editor import real_photo_inference, remote
 from tests.test_protected_comparison_inference import _execute, _fixture
 
 
@@ -38,7 +38,9 @@ def _bundle_with_members(receipt: dict[str, object], members: dict[str, bytes]) 
     return stream.getvalue()
 
 
-def _successful_result(*, mutate: str | None = None) -> tuple[dict, dict, bytes, str]:
+def _successful_result(
+    *, mutate: str | None = None, runtime_versions: dict[str, str] | None = None
+) -> tuple[dict, dict, bytes, str]:
     manifest, payload_files = _fixture()
     state, _pipes, _runtime = _execute()
     assert state["status"] == "passed"
@@ -67,7 +69,11 @@ def _successful_result(*, mutate: str | None = None) -> tuple[dict, dict, bytes,
         stage="passed",
         payload_sha256="c" * 64,
         manifest=manifest,
-        runtime_versions=remote.RUNTIME_PINS,
+        runtime_versions=(
+            runtime_versions
+            if runtime_versions is not None
+            else {"modal": "1.6.1", **remote.RUNTIME_PINS}
+        ),
         observed_commit=remote.DIFFSYNTH_COMMIT,
         peak_memory_bytes=100,
         failure=None,
@@ -619,6 +625,65 @@ def test_successful_result_requires_frozen_schedule_and_78_artifacts() -> None:
             manifest=manifest,
             payload_files=payload_files,
         )
+
+
+def test_successful_result_accepts_exact_worker_reported_runtime_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        real_photo_inference.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(__version__="1.6.1") if name == "modal" else None,
+    )
+    monkeypatch.setattr(
+        real_photo_inference.importlib.metadata,
+        "version",
+        lambda name: remote.RUNTIME_PINS[name],
+    )
+    runtime_versions = real_photo_inference._runtime_versions()
+    manifest, payload_files, result, payload_sha = _successful_result(
+        runtime_versions=runtime_versions
+    )
+
+    validated = receipts.validate_result_bundle(
+        result,
+        run_id="comparison-r1",
+        payload_sha256=payload_sha,
+        source_commit=str(manifest["source_sha"]),
+        manifest=manifest,
+        payload_files=payload_files,
+    )
+
+    assert validated["status"] == "passed"
+
+
+def test_passed_result_rejects_inexact_worker_runtime_versions() -> None:
+    manifest, payload_files, result, payload_sha = _successful_result()
+    with ZipFile(BytesIO(result)) as archive:
+        receipt = json.loads(archive.read("receipt.json"))
+        members = {
+            name: archive.read(name) for name in archive.namelist() if name != "receipt.json"
+        }
+    expected = receipt["runtime_versions"]
+    invalid_versions = (
+        {key: value for key, value in expected.items() if key != "modal"},
+        {**expected, "modal": "1.6.0"},
+        {**expected, "torch": "wrong-version"},
+        {key: value for key, value in expected.items() if key != "torch"},
+        {**expected, "unexpected": "1.0"},
+    )
+
+    for runtime_versions in invalid_versions:
+        changed_receipt = {**receipt, "runtime_versions": runtime_versions}
+        with pytest.raises(ValueError, match="pinned runtime"):
+            receipts.validate_result_bundle(
+                _bundle_with_members(changed_receipt, members),
+                run_id="comparison-r1",
+                payload_sha256=payload_sha,
+                source_commit=str(manifest["source_sha"]),
+                manifest=manifest,
+                payload_files=payload_files,
+            )
 
 
 def test_passed_receipt_requires_raw_background_replay_equality() -> None:
